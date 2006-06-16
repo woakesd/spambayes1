@@ -1,0 +1,44 @@
+spambayes (1.0.4-3) unstable; urgency=low
+
+  * Complie with Policy §7.6
+
+ -- Alexandre Fayolle <afayolle@debian.org>  Fri, 16 Jun 2006 09:49:47 +0200
+
+spambayes (1.0.4-2) unstable; urgency=low
+
+  * updated to 3.7.2 standards
+  * new Python policy
+  * Fixed Gnus instructions (closes: #340872)
+  * Applied patch by Kim Minh Kaplan <qdsmgbm02@sneakemail.com> allowing
+    sb_imapfilter to use CRAM MD5 authentication (closes: #301221)
+
+ -- Alexandre Fayolle <afayolle@debian.org>  Thu, 15 Jun 2006 11:11:34 +0200
+
+spambayes (1.0.4-1) unstable; urgency=low
+
+  * New upstream release
+  * Use 3.6.2 standards
+  * Use debhelper 5.0
+  * Added watch file for DEHS
+
+ -- Alexandre Fayolle <afayolle@debian.org>  Mon, 20 Mar 2006 11:36:54 +0100
+
+spambayes (1.0.3-1) unstable; urgency=low
+
+  * New upstream release
+  * Removed the python2.3-spambayes package, and leave only spambayes (Closes: #286590)
+
+ -- Alexandre Fayolle <afayolle@debian.org>  Tue, 15 Feb 2005 17:25:15 +0100
+
+spambayes (1.0.1-1) unstable; urgency=low
+
+  * New upstream release (Closes: #286551)
+  * Fixed path in example spambayes.el file (Closes: #285636)
+
+ -- Alexandre Fayolle <afayolle@debian.org>  Tue, 21 Dec 2004 15:18:43 +0100
+
+spambayes (1.0-1) unstable; urgency=low
+
+  * Initial upload to Debian (Closes: #267946)
+
+ -- Alexandre Fayolle <afayolle@debian.org>  Sun, 24 Oct 2004 11:06:51 +0200

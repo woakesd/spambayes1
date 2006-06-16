@@ -1,0 +1,102 @@
+#!/usr/bin/make -f
+
+# Uncomment this to turn on verbose mode.
+#export DH_VERBOSE=1
+
+SB=debian/spambayes
+
+debian_patches=spambayes
+
+build: build-stamp
+build-stamp: patched-stamp
+	dh_testdir
+
+	## Build for all python versions
+	python setup.py build
+	cp CHANGELOG.txt changelog
+	touch build-stamp
+
+clean: reverse-patches
+	dh_testdir
+	rm -f build-stamp install-stamp
+	rm -rf build $(SB)
+	rm -f *.pyc */*.pyc */*/*.pyc
+	rm -f changelog
+	dh_clean
+
+install: install-stamp
+install-stamp: build
+	dh_testdir
+	dh_testroot
+	dh_clean -k
+	dh_installdirs -A
+
+	# Install Python modules
+	python setup.py install --prefix=$(SB)/usr --no-compile
+	dh_install -A
+	touch install-stamp
+
+binary-indep: build install
+	dh_testdir -i
+	dh_testroot -i
+	dh_installdocs -i
+	dh_installchangelogs -i
+	dh_pycentral -i
+	dh_python -i
+	dh_link -i
+	dh_strip -i
+	dh_compress -i
+	dh_fixperms -i
+	dh_installdeb -i
+	dh_gencontrol -i
+	dh_md5sums -i
+	dh_builddeb -i
+
+binary-arch:
+
+binary: binary-indep
+.PHONY: build clean binary-indep binary install binary-arch
+
+# ---------------------------------------------------------------------------
+# Various rules to unpack addons and (un)apply patches.
+# Borrowed from DBS
+
+patch_dir       = debian/patches
+
+apply-patches: patched-stamp
+reverse-patches:
+	@for stamp in none patched-*; do \
+		case "$$stamp" in none|patched-stamp|patched-\*) continue; esac; \
+		patch=`echo $$stamp | sed -e 's/patched-//'`; \
+		echo "trying to revert patch $$patch ..."; \
+		if [ -x $(patch_dir)/$$patch.dpatch ]; then true; else \
+			chmod +x $(patch_dir)/$$patch.dpatch; fi; \
+		if $(patch_dir)/$$patch.dpatch -unpatch; then \
+			echo "reverted $$patch patch."; \
+			rm -f $$stamp; \
+		else \
+			echo "error in reverting $$patch patch."; \
+			exit 1; \
+		fi; \
+	done
+	@echo "Removing patched-stamp"
+	@rm -f patched-stamp
+
+patched-%: $(patch_dir)/%.dpatch
+	@if [ -x $< ]; then true; else chmod +x $<; fi
+	@if [ -f $@ ]; then \
+		echo "$* patches already applied. $< $@"; exit 1; \
+	fi
+	$< -patch
+	@echo "$* patches applied." > $@
+
+patched-stamp: $(foreach p,$(debian_patches),patched-$(p))
+	@echo -e "\nPatches applied:" >> pxxx
+	@for i in none $(debian_patches); do \
+		if [ -r debian/patches/$$i.dpatch ]; then \
+			echo -e "\n$$i:" >> pxxx; \
+			sed -n 's/^# *DP: */  /p' debian/patches/$$i.dpatch >> pxxx; \
+		fi \
+	done
+	@echo "Writing patched-stamp"
+	@mv -f pxxx patched-stamp

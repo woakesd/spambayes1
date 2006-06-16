@@ -1,0 +1,8 @@
+Please read WHAT_IS_NEW.txt if you upgrade from an earlier version of
+SpamBayes.
+
+This package does not include the windows specific tools available in
+SpamBayes (the Outlook Plugin, the taskbar applet...). But they are
+available in the source package.
+
+ -- Alexandre Fayolle <afayolle@debian.org>, Tue Feb 15 17:36:51 2005
