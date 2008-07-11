@@ -86,11 +86,11 @@ To Do:
 # This module is part of the spambayes project, which is Copyright 2002-3
 # The Python Software Foundation and is covered by the Python Software
 # Foundation license.
+from __future__ import generators
 
 __author__ = "Tony Meyer <ta-meyer@ihug.co.nz>, Tim Stone"
 __credits__ = "All the Spambayes folk."
 
-from __future__ import generators
 
 try:
     True, False

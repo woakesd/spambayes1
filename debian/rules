@@ -42,7 +42,6 @@ binary-indep: build install
 	dh_installdocs -i
 	dh_installchangelogs -i
 	dh_pycentral -i
-	dh_python -i
 	dh_link -i
 	dh_strip -i
 	dh_compress -i
@@ -91,10 +90,10 @@ patched-%: $(patch_dir)/%.dpatch
 	@echo "$* patches applied." > $@
 
 patched-stamp: $(foreach p,$(debian_patches),patched-$(p))
-	@echo -e "\nPatches applied:" >> pxxx
+	@(echo; echo "Patches applied:") >> pxxx
 	@for i in none $(debian_patches); do \
 		if [ -r debian/patches/$$i.dpatch ]; then \
-			echo -e "\n$$i:" >> pxxx; \
+			(echo; echo "$$i:") >> pxxx; \
 			sed -n 's/^# *DP: */  /p' debian/patches/$$i.dpatch >> pxxx; \
 		fi \
 	done
