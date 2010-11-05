@@ -86,11 +86,11 @@ To Do:
 # This module is part of the spambayes project, which is Copyright 2002-3
 # The Python Software Foundation and is covered by the Python Software
 # Foundation license.
-from __future__ import generators
 
 __author__ = "Tony Meyer <ta-meyer@ihug.co.nz>, Tim Stone"
 __credits__ = "All the Spambayes folk."
 
+from __future__ import generators
 
 try:
     True, False
@@ -108,7 +108,6 @@ import types
 import traceback
 import email
 import email.Parser
-import hmac
 from getpass import getpass
 from email.Header import Header
 from email.Utils import parsedate
@@ -222,14 +221,6 @@ class IMAPSession(BaseIMAP):
         # but we need to try something).
         self._read = self.read
         self.read = self.safe_read
-
-
-    # RFC 2195
-    def authenticatecrammd5(self, username, pwd):
-        self.authenticate('CRAM-MD5',
-                          lambda (response):
-                          username + " " + hmac.HMAC(pwd, response).hexdigest())
-
 
     def login(self, username, pwd):
         try:
@@ -934,10 +925,7 @@ or training will be performed.
     else:
         while True:
             imap = IMAPSession(server, port, imapDebug, doExpunge)
-            if 'AUTH=CRAM-MD5' in imap.capabilities:
-                imap.authenticatecrammd5(username, pwd)
-            else:
-                imap.login(username, pwd)
+            imap.login(username, pwd)
 
             if doTrain:
                 if options["globals", "verbose"]:

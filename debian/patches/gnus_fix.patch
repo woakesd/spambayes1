@@ -1,0 +1,19 @@
+# HG changeset patch
+# User Alexandre Fayolle <alexandre.fayolle@logilab.fr>
+# Date 1288525584 -3600
+# Node ID a19cf104dffb212068638409836cef5795b2ada1
+# Parent  3db27c3f13ce1710a5badcad4d60bba0ab41826e
+gnus interface change
+
+diff --git a/contrib/spambayes.el b/contrib/spambayes.el
+--- a/contrib/spambayes.el
++++ b/contrib/spambayes.el
+@@ -25,7 +25,7 @@
+ ;; To install, just drop this file in your load path, and insert the
+ ;; following lines in ~/.gnus:
+ ;;
+-;; (setq gnus-sum-load-hook
++;; (setq gnus-summary-mode-hook
+ ;;   (lambda ()
+ ;;     (require 'spambayes)
+ ;;     (define-key gnus-summary-mode-map [(B) (s)] 'spambayes-gnus-refile-as-spam)

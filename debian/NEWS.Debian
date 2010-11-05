@@ -1,0 +1,14 @@
+spambayes (1.0.4-6) unstable; urgency=low
+
+  * Important change in the script names
+
+    Until 1.0.4-6, the spambayes package provided scripts installed in
+    /usr/bin and porting the ".py" extension. This has been strongly
+    discouraged for some time in Debian, and I'm about to change
+    this. This version of the package renames the scripts (by removing the
+    .py extension) and will install backward compatibility symbolic links
+    in /usr/bin with the old names. You are strongly encouraged to update
+    your scripts (procmail...) to use the proper names, as the old names
+    will stop working in the future.
+
+ -- Alexandre Fayolle <afayolle@debian.org>  Sun, 31 Oct 2010 16:54:41 +0100

@@ -1,0 +1,37 @@
+# HG changeset patch
+# Parent 418dc414cd7e4d4098e3ddfa49c0e759d46c2554
+handle ValueErrors which can be raised by decode_header in email module (closes #491278)
+
+diff --git a/spambayes/UserInterface.py b/spambayes/UserInterface.py
+--- a/spambayes/UserInterface.py
++++ b/spambayes/UserInterface.py
+@@ -214,7 +214,7 @@ class BaseUserInterface(Dibbler.HTTPPlug
+ 
+         try:
+             sections = email.Header.decode_header(field)
+-        except (binascii.Error, email.Errors.HeaderParseError):
++        except (binascii.Error, email.Errors.HeaderParseError, ValueError):
+             sections = [(field, None)]
+         field = ' '.join([text for text, unused in sections])
+         if len(field) > limit:
+diff --git a/spambayes/tokenizer.py b/spambayes/tokenizer.py
+--- a/spambayes/tokenizer.py
++++ b/spambayes/tokenizer.py
+@@ -1314,7 +1314,7 @@ class Tokenizer:
+         x = msg.get('subject', '')
+         try:
+             subjcharsetlist = email.Header.decode_header(x)
+-        except (binascii.Error, email.Errors.HeaderParseError):
++        except (binascii.Error, email.Errors.HeaderParseError, ValueError):
+             subjcharsetlist = [(x, 'invalid')]
+         for x, subjcharset in subjcharsetlist:
+             if subjcharset is not None:
+@@ -1346,7 +1346,7 @@ class Tokenizer:
+                 if name:
+                     try:
+                         subjcharsetlist = email.Header.decode_header(name)
+-                    except (binascii.Error, email.Errors.HeaderParseError):
++                    except (binascii.Error, email.Errors.HeaderParseError, ValueError):
+                         subjcharsetlist = [(name, 'invalid')]
+                     for name, charset in subjcharsetlist:
+                         yield "%s:name:%s" % (field, name.lower())

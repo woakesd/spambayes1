@@ -75,11 +75,11 @@ To Do:
 # This module is part of the spambayes project, which is Copyright 2002-3
 # The Python Software Foundation and is covered by the Python Software
 # Foundation license.
-from __future__ import generators
 
 __author__ = "Tim Stone <tim@fourstonesExpressions.com>"
 __credits__ = "Richie Hindle, Tim Peters, all the spambayes contributors."
 
+from __future__ import generators
 
 try:
     True, False

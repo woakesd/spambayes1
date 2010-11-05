@@ -2,16 +2,16 @@ Source: spambayes
 Section: mail
 Priority: optional
 Maintainer: Alexandre Fayolle <afayolle@debian.org>
-Build-Depends: debhelper (>= 5.0.37.1)
-Build-Depends-Indep: python (>=2.3.5-7), python-dev (>=2.3.5-7), python-central
-Standards-Version: 3.7.3
+Build-Depends: debhelper (>= 7.0.50), python (>=2.3.5-7)
+Build-Depends-Indep: python-support (>=0.5.3)
+Standards-Version: 3.9.1
 XS-Python-Version: current
 Homepage: http://spambayes.sourceforge.net 
 
 Package: spambayes
 Architecture: all
 XB-Python-Version: ${python:Versions}
-Depends: ${python:Depends}
+Depends: ${python:Depends}, ${misc:Depends}
 Description: Python-based spam filter using statistical analysis
  SpamBayes uses a different set of algorithm to most statistical spam
  filters, which enables to dramatically lower the number of legitimate

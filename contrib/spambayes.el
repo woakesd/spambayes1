@@ -25,7 +25,7 @@
 ;; To install, just drop this file in your load path, and insert the
 ;; following lines in ~/.gnus:
 ;;
-;; (setq gnus-summary-mode-hook
+;; (setq gnus-sum-load-hook
 ;;   (lambda ()
 ;;     (require 'spambayes)
 ;;     (define-key gnus-summary-mode-map [(B) (s)] 'spambayes-gnus-refile-as-spam)

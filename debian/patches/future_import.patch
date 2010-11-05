@@ -1,0 +1,119 @@
+# HG changeset patch
+# User Alexandre Fayolle <alexandre.fayolle@logilab.fr>
+# Date 1288525669 -3600
+# Node ID dd37dc3ee804d63b0f3e1c415fcabf0dd52d7460
+# Parent 04f5d2ecfd53f14ab35d9ca1f1f8fc3186a39f8b
+fix from __future__ imports
+
+diff --git a/scripts/sb_dbexpimp.py b/scripts/sb_dbexpimp.py
+--- a/scripts/sb_dbexpimp.py
++++ b/scripts/sb_dbexpimp.py
+@@ -88,9 +88,10 @@ To Do:
+ # The Python Software Foundation and is covered by the Python Software
+ # Foundation license.
+ 
++from __future__ import generators
++
+ __author__ = "Tim Stone <tim@fourstonesExpressions.com>"
+ 
+-from __future__ import generators
+ 
+ # Python 2.2 compatibility stuff
+ try:
+diff --git a/scripts/sb_imapfilter.py b/scripts/sb_imapfilter.py
+--- a/scripts/sb_imapfilter.py
++++ b/scripts/sb_imapfilter.py
+@@ -61,6 +61,7 @@ Warnings:
+       mail flagged as such, *or* if you set the imap_expunge option to
+       True, then this mail will be irretrievably lost.
+ """
++from __future__ import generators
+ 
+ todo = """
+ To Do:
+@@ -90,7 +91,6 @@ To Do:
+ __author__ = "Tony Meyer <ta-meyer@ihug.co.nz>, Tim Stone"
+ __credits__ = "All the Spambayes folk."
+ 
+-from __future__ import generators
+ 
+ try:
+     True, False
+diff --git a/scripts/sb_notesfilter.py b/scripts/sb_notesfilter.py
+--- a/scripts/sb_notesfilter.py
++++ b/scripts/sb_notesfilter.py
+@@ -1,6 +1,6 @@
+ #! /usr/bin/env python
+ 
+-'''sb_notesfilter.py - Lotus Notes Spambayes interface.
++"""sb_notesfilter.py - Lotus Notes Spambayes interface.
+ 
+ Classes:
+ 
+@@ -124,16 +124,16 @@ To Do:
+     o sb_server style training/configuration interface?
+     o parameter to retrain?
+     o Suggestions?
+-'''
++"""
+ 
+ # This module is part of the spambayes project, which is Copyright 2002
+ # The Python Software Foundation and is covered by the Python Software
+ # Foundation license.
++from __future__ import generators
+ 
+ __author__ = "Tim Stone <tim@fourstonesExpressions.com>"
+ __credits__ = "Mark Hammond, for his remarkable win32 modules."
+ 
+-from __future__ import generators
+ 
+ try:
+     True, False
+diff --git a/spambayes/Corpus.py b/spambayes/Corpus.py
+--- a/spambayes/Corpus.py
++++ b/spambayes/Corpus.py
+@@ -75,11 +75,11 @@ To Do:
+ # This module is part of the spambayes project, which is Copyright 2002-3
+ # The Python Software Foundation and is covered by the Python Software
+ # Foundation license.
++from __future__ import generators
+ 
+ __author__ = "Tim Stone <tim@fourstonesExpressions.com>"
+ __credits__ = "Richie Hindle, Tim Peters, all the spambayes contributors."
+ 
+-from __future__ import generators
+ 
+ try:
+     True, False
+diff --git a/spambayes/FileCorpus.py b/spambayes/FileCorpus.py
+--- a/spambayes/FileCorpus.py
++++ b/spambayes/FileCorpus.py
+@@ -78,11 +78,11 @@ To Do:
+ # This module is part of the spambayes project, which is Copyright 2002
+ # The Python Software Foundation and is covered by the Python Software
+ # Foundation license.
++from __future__ import generators
+ 
+ __author__ = "Tim Stone <tim@fourstonesExpressions.com>"
+ __credits__ = "Richie Hindle, Tim Peters, all the spambayes contributors."
+ 
+-from __future__ import generators
+ 
+ from spambayes import Corpus
+ from spambayes import message
+diff --git a/spambayes/message.py b/spambayes/message.py
+--- a/spambayes/message.py
++++ b/spambayes/message.py
+@@ -71,11 +71,11 @@ To Do:
+ # This module is part of the spambayes project, which is Copyright 2002-3
+ # The Python Software Foundation and is covered by the Python Software
+ # Foundation license.
++from __future__ import generators
+ 
+ __author__ = "Tim Stone <tim@fourstonesExpressions.com>"
+ __credits__ = "Mark Hammond, Tony Meyer, all the spambayes contributors."
+ 
+-from __future__ import generators
+ 
+ try:
+     True, False
