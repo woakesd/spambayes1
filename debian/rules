@@ -22,6 +22,7 @@ clean:
 	python setup.py clean
 	rm -f *.pyc */*.pyc */*/*.pyc
 	rm -f changelog
+	rm -rf spambayes.egg-info
 	dh_clean
 
 install: install-stamp
@@ -33,6 +34,7 @@ install-stamp: build
 
 	# Install Python modules
 	python setup.py -q install --root=$(SB) --no-compile ${py_setup_install_args}
+	rm $(SB)/usr/bin/sb_notesfilter.py
 	prename "s/.py//" $(SB)/usr/bin/*.py
 	rm -f $(SB)/usr/bin/sb_pop3dnd 
 	dh_install -A
@@ -43,7 +45,7 @@ binary-indep: build install
 	dh_testroot -i
 	dh_installdocs -i
 	dh_installchangelogs -i
-	dh_pysupport -i
+	dh_python2 -i
 	dh_link -i
 	dh_strip -i
 	dh_compress -i

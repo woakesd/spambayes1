@@ -13,7 +13,7 @@ diff --git a/contrib/spambayes.el b/contrib/spambayes.el
  
  
 -(defvar spambayes-filter-program "/usr/local/bin/sb_filter.py"
-+(defvar spambayes-filter-program "/usr/bin/sb_filter.py"
++(defvar spambayes-filter-program "/usr/bin/sb_filter"
    "Path to the sb_filter program.")
  
  

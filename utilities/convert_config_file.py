@@ -22,7 +22,7 @@ really an easy way around this, but it's easily fixed by hand, and if you
 don't look at the config file, you'll never know <wink>.
 """
 
-# This module is part of the spambayes project, which is Copyright 2002-3
+# This module is part of the spambayes project, which is Copyright 2002-2007
 # The Python Software Foundation and is covered by the Python Software
 # Foundation license.
 
@@ -45,7 +45,7 @@ def run():
     try:
         opts, args = getopt.getopt(sys.argv[1:], 'vhf:')
     except getopt.error, msg:
-        print >>sys.stderr, str(msg) + '\n\n' + __doc__
+        print >> sys.stderr, str(msg) + '\n\n' + __doc__
         sys.exit()
 
     filename = "bayescustomize.ini"
@@ -53,7 +53,7 @@ def run():
 
     for opt, arg in opts:
         if opt == '-h':
-            print >>sys.stderr, __doc__
+            print >>  sys.stderr, __doc__
             sys.exit()
         elif opt == '-f':
             filename = arg
@@ -64,7 +64,6 @@ def run():
     if verbose:
         print "Loading defaults"
     o.load_defaults()
-    alts = []
     if verbose:
         print "Updating file:", filename
     if os.path.exists(filename):

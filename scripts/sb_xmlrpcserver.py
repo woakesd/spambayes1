@@ -22,22 +22,13 @@ Where:
         Port number to listen to.
 """
 
-import os
 import getopt
 import sys
-import traceback
 import xmlrpclib
 import SimpleXMLRPCServer
 
 from spambayes import hammie, Options
 from spambayes import storage
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-
 
 class ReusableSimpleXMLRPCServer(SimpleXMLRPCServer.SimpleXMLRPCServer):
     allow_reuse_address = True

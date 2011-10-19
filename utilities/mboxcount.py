@@ -29,18 +29,10 @@ in whether it uses strict or lax parsing.
 
 import sys
 import mailbox
-import email
 import getopt
 import glob
 
 from spambayes.mboxutils import get_message
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-
 
 program = sys.argv[0]
 

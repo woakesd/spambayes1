@@ -42,17 +42,9 @@ random, it's reproducible.
 import sys
 import random
 import mailbox
-import email
 import getopt
 
 from spambayes import mboxutils
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-
 
 program = sys.argv[0]
 

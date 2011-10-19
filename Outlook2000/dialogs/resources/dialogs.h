@@ -8,9 +8,9 @@
 #define IDD_FILTER_NOW                  104
 #define IDD_FOLDER_SELECTOR             105
 #define IDD_ADVANCED                    106
+#define IDD_STATISTICS                  107
 #define IDD_GENERAL                     108
 #define IDD_FILTER_SPAM                 110
-#define IDD_FILTER_UNSURE               111
 #define IDD_DIAGNOSTIC                  113
 #define IDD_WIZARD                      114
 #define IDD_WIZARD_WELCOME              115
@@ -25,6 +25,7 @@
 #define IDD_WIZARD_FINISHED_TRAIN_LATER 124
 #define IDB_SBWIZLOGO                   125
 #define IDB_FOLDERS                     127
+#define IDD_NOTIFICATIONS               128
 #define IDC_PROGRESS                    1000
 #define IDC_PROGRESS_TEXT               1001
 #define IDC_STATIC_HAM                  1002
@@ -54,6 +55,7 @@
 #define IDC_SLIDER_UNSURE               1029
 #define IDC_EDIT_UNSURE                 1030
 #define IDC_ACTION_UNSURE               1031
+#define IDC_ACTION_HAM                  1032
 #define IDC_FOLDER_UNSURE               1033
 #define IDC_BROWSE_UNSURE               1034
 #define IDC_TRAINING_STATUS             1035
@@ -97,15 +99,27 @@
 #define IDC_WIZ_GRAPHIC                 1092
 #define IDC_BUT_VIEW_LOG                1093
 #define IDC_EDIT1                       1094
+#define IDC_HAM_SOUND                   1094
 #define IDC_STATISTICS                  1095
+#define IDC_UNSURE_SOUND                1095
+#define IDC_BUT_RESET_STATS             1096
+#define IDC_SPAM_SOUND                  1096
+#define IDC_LAST_RESET_DATE             1097
+#define IDC_ENABLE_SOUNDS               1098
+#define IDC_ACCUMULATE_DELAY_SLIDER     1099
+#define IDC_ACCUMULATE_DELAY_TEXT       1100
+#define IDC_BROWSE_HAM_SOUND            1101
+#define IDC_BROWSE_UNSURE_SOUND         1102
+#define IDC_BROWSE_HAM_SOUND2           1103
+#define IDC_BROWSE_SPAM_SOUND           1103
 
 // Next default values for new objects
 // 
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        128
+#define _APS_NEXT_RESOURCE_VALUE        129
 #define _APS_NEXT_COMMAND_VALUE         40001
-#define _APS_NEXT_CONTROL_VALUE         1096
+#define _APS_NEXT_CONTROL_VALUE         1102
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif

@@ -30,13 +30,7 @@ from spambayes import classifier
 from spambayes import msgs
 import email
 from email import Message
-import regimes
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
+from testtools import regimes
 
 class Test:
     # Pass a classifier instance (an instance of Bayes).
@@ -76,10 +70,10 @@ class Test:
         # The number of test instances correctly and incorrectly classified.
         self.nham_right = 0
         self.nham_wrong = 0
-        self.nham_unsure = 0;
+        self.nham_unsure = 0
         self.nspam_right = 0
         self.nspam_wrong = 0
-        self.nspam_unsure = 0;
+        self.nspam_unsure = 0
 
         # Lists of bad predictions.
         self.ham_wrong_examples = []    # False positives:  ham called spam.

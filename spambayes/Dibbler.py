@@ -169,14 +169,8 @@ try:
 except ImportError:
     import StringIO
 
-import os, sys, re, time, traceback, md5, base64
+import sys, re, time, traceback, base64
 import socket, asyncore, asynchat, cgi, urlparse, webbrowser
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
 
 try:
     "".rstrip("abc")
@@ -187,6 +181,8 @@ except TypeError:
     RSTRIP_CHARS_AVAILABLE = False
 else:
     RSTRIP_CHARS_AVAILABLE = True
+
+from spambayes.port import md5
 
 class BrighterAsyncChat(asynchat.async_chat):
     """An asynchat.async_chat that doesn't give spurious warnings on
@@ -233,6 +229,12 @@ class Context:
     def __init__(self, asyncMap=asyncore.socket_map):
         self._HTTPPort = None  # Stores the port for `run(launchBrowser=True)`
         self._map = asyncMap
+    def pop(self, key):
+        return self._map.pop(key)
+    def keys(self):
+        return self._map.keys()
+    def __len__(self):
+        return len(self._map)
 
 _defaultContext = Context()
 
@@ -277,7 +279,11 @@ class Listener(asyncore.dispatcher):
         self.set_reuse_addr()
         if type(port) != type(()):
             port = ('', port)
-        self.bind(port)
+        try:
+            self.bind(port)
+        except socket.error:
+            print >> sys.stderr, "port", port, "in use"
+            raise
         self.listen(5)
 
     def handle_accept(self):
@@ -450,7 +456,7 @@ class _HTTPHandler(BrighterAsyncChat):
                 elif authenticationMode == HTTPServer.DIGEST_AUTHENTICATION:
                     authResult = self._digestAuthentication(login, method)
                 else:
-                    print >>sys.stdout, "Unknown mode: %s" % authenticationMode
+                    print >> sys.stderr, "Unknown mode: %s" % authenticationMode
 
             if not authResult:
                 self.writeUnauthorizedAccess(serverAuthMode)
@@ -527,7 +533,7 @@ class _HTTPHandler(BrighterAsyncChat):
         headers = []
         headers.append("HTTP/1.1 200 OK")
         headers.append("Connection: close")
-        headers.append("Content-Type: %s" % contentType)
+        headers.append('Content-Type: %s; charset="utf-8"' % contentType)
         headers.append("Date: %s" % httpNow)
         for name, value in extraHeaders.items():
             headers.append("%s: %s" % (name, value))
@@ -543,7 +549,7 @@ class _HTTPHandler(BrighterAsyncChat):
         if not self._headersWritten:
             headers.append("HTTP/1.0 %d Error" % code)
             headers.append("Connection: close")
-            headers.append("Content-Type: text/html")
+            headers.append('Content-Type: text/html; charset="utf-8"')
             headers.append("")
             headers.append("")
         self.push("%s<html><body>%s</body></html>" % \
@@ -577,7 +583,7 @@ class _HTTPHandler(BrighterAsyncChat):
         headers.append('HTTP/1.0 401 Unauthorized')
         headers.append('WWW-Authenticate: ' + authString)
         headers.append('Connection: close')
-        headers.append('Content-Type: text/html')
+        headers.append('Content-Type: text/html; charset="utf-8"')
         headers.append('')
         headers.append('')
         self.write('\r\n'.join(headers) + self._server.getCancelMessage())
@@ -619,7 +625,8 @@ class _HTTPHandler(BrighterAsyncChat):
         """Check if the specified nonce is still valid. A nonce is invalid
         when its time converted value is lower than current time."""
         padAmount = len(nonce) % 4
-        if padAmount > 0: padAmount = 4 - padAmount
+        if padAmount > 0:
+            padAmount = 4 - padAmount
         nonce += '=' * (len(nonce) + padAmount)
 
         decoded = base64.decodestring(nonce)
@@ -644,9 +651,9 @@ class _HTTPHandler(BrighterAsyncChat):
 
         # The following computations are based upon RFC 2617.
         A1  = "%s:%s:%s" % (userName, self._server.getRealm(), password)
-        HA1 = md5.new(A1).hexdigest()
+        HA1 = md5(A1).hexdigest()
         A2  = "%s:%s" % (method, stripQuotes(options["uri"]))
-        HA2 = md5.new(A2).hexdigest()
+        HA2 = md5(A2).hexdigest()
 
         unhashedDigest = ""
         if options.has_key("qop"):
@@ -663,7 +670,7 @@ class _HTTPHandler(BrighterAsyncChat):
                              stripQuotes(options["qop"]), HA2)
         else:
             unhashedDigest = "%s:%s:%s" % (HA1, nonce, HA2)
-        hashedDigest = md5.new(unhashedDigest).hexdigest()
+        hashedDigest = md5(unhashedDigest).hexdigest()
 
         return (stripQuotes(options["response"]) == hashedDigest and
                 self._isValidNonce(nonce))
@@ -729,8 +736,8 @@ def run(launchBrowser=False, context=_defaultContext):
 
 def runTestServer(readyEvent=None):
     """Runs the calendar server example, with an added `/shutdown` URL."""
-    import Dibbler, calendar
-    class Calendar(Dibbler.HTTPPlugin):
+    import calendar
+    class Calendar(HTTPPlugin):
         _form = '''<html><body><h3>Calendar Server</h3>
                    <form action='/'>
                    Year: <input type='text' name='year' size='4'>
@@ -751,12 +758,12 @@ def runTestServer(readyEvent=None):
             self.close()
             sys.exit()
 
-    httpServer = Dibbler.HTTPServer(8888)
+    httpServer = HTTPServer(8888)
     httpServer.register(Calendar())
     if readyEvent:
         # Tell the self-test code that the test server is up and running.
         readyEvent.set()
-    Dibbler.run(launchBrowser=True)
+    run(launchBrowser=True)
 
 def test():
     """Run a self-test."""

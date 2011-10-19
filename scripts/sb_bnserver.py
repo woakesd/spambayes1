@@ -27,13 +27,7 @@ Where:
         unix domain socket used on which we listen    
 """
 
-import os, getopt, sys, SocketServer, time, traceback, select, socket, errno
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
+import os, getopt, sys, SocketServer, traceback, select, socket, errno
 
 # See Options.py for explanations of these properties
 program = sys.argv[0]
@@ -59,11 +53,11 @@ def main():
         usage(2, "socket not specified")
 
     # get the server up before initializing spambayes, so that
-    # we havent wasted time if we later find we cant start the server
+    # we haven't wasted time if we later find we can't start the server
     try:
         server = BNServer(args[0], BNRequest)
     except socket.error,e:
-        if e[0]==errno.EADDRINUSE:
+        if e[0] == errno.EADDRINUSE:
             pass   # in use, no need
         else:
             raise  # a real error
@@ -108,7 +102,7 @@ class BNServer(SocketServer.UnixStreamServer):
             pass
     
     def get_request(self):
-        r,w,e = select.select([self.socket], [], [], self.timeout)
+        r, w, e = select.select([self.socket], [], [], self.timeout)
         if r:
             return self.socket.accept()
         else:
@@ -119,15 +113,16 @@ class BNRequest(SocketServer.StreamRequestHandler):
         switches = self.rfile.readline()
         body = self.rfile.read()
         try:
-            response = self._calc_response(switches,body)
+            response = self._calc_response(switches, body)
             self.wfile.write('0\n%d\n'%(len(response),))
             self.wfile.write(response)
         except:
-            response = traceback.format_exception_only(sys.exc_info()[0],sys.exc_info()[1])[0]
+            response = traceback.format_exception_only(sys.exc_info()[0],
+                                                       sys.exc_info()[1])[0]
             self.wfile.write('1\n%d\n'%(len(response),))
             self.wfile.write(response)
        
-    def _calc_response(self,switches,body):
+    def _calc_response(self, switches, body):
         switches = switches.split()
         actions = []
         opts, args = getopt.getopt(switches, 'fgstGS')

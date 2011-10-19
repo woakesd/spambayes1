@@ -41,19 +41,12 @@ To make rebuilding the database easier, uploaded messages are appended
 to _pop3proxyham.mbox and _pop3proxyspam.mbox.
 """
 
-# This module is part of the spambayes project, which is Copyright 2002
+# This module is part of the spambayes project, which is Copyright 2002-2007
 # The Python Software Foundation and is covered by the Python Software
 # Foundation license.
 
 __author__ = "Richie Hindle <richie@entrian.com>"
 __credits__ = "Tim Peters, Neale Pickett, Tim Stone, all the Spambayes folk."
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-
 
 todo = """
 
@@ -64,7 +57,6 @@ User interface improvements:
  o Once the pieces are on separate pages, make the paste box bigger.
  o Deployment: Windows executable?  atlaxwin and ctypes?  Or just
    webbrowser?
- o Save the stats (num classified, etc.) between sessions.
  o "Reload database" button.
 
 
@@ -83,8 +75,7 @@ Code quality:
 Info:
 
  o Slightly-wordy index page; intro paragraph for each page.
- o In both stats and training results, report nham and nspam - warn if
-   they're very different (for some value of 'very').
+ o In both stats and training results, report nham and nspam.
  o "Links" section (on homepage?) to project homepage, mailing list,
    etc.
 
@@ -94,22 +85,23 @@ Gimmicks:
  o Classify a web page given a URL.
  o Graphs.  Of something.  Who cares what?
  o NNTP proxy.
- o Zoe...!
 """
 
-import os, sys, re, errno, getopt, time, traceback, socket, cStringIO
+import sys, re, getopt, time, socket, email
 from thread import start_new_thread
-from email.Header import Header
 
 import spambayes.message
+from spambayes import i18n
+from spambayes import Stats
 from spambayes import Dibbler
 from spambayes import storage
-from spambayes.FileCorpus import FileCorpus, ExpiryFileCorpus
+from spambayes.FileCorpus import ExpiryFileCorpus
 from spambayes.FileCorpus import FileMessageFactory, GzipFileMessageFactory
-from spambayes.Options import options, get_pathname_option
+from spambayes.Options import options, get_pathname_option, _
 from spambayes.UserInterface import UserInterfaceServer
 from spambayes.ProxyUI import ProxyUserInterface
-from spambayes.Version import get_version_string
+from spambayes.Version import get_current_version
+
 
 # Increase the stack size on MacOS X.  Stolen from Lib/test/regrtest.py
 if sys.platform == 'darwin':
@@ -135,11 +127,11 @@ class ServerLineReader(Dibbler.BrighterAsyncChat):
     can't connect to the real POP3 server and talk to it
     synchronously, because that would block the process."""
 
-    lineCallback = None
-
-    def __init__(self, serverName, serverPort, lineCallback):
-        Dibbler.BrighterAsyncChat.__init__(self)
+    def __init__(self, serverName, serverPort, lineCallback, ssl=False,
+                 map=None):
+        Dibbler.BrighterAsyncChat.__init__(self, map=map)
         self.lineCallback = lineCallback
+        self.handled_exception = False
         self.request = ''
         self.set_terminator('\r\n')
         self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -149,7 +141,7 @@ class ServerLineReader(Dibbler.BrighterAsyncChat):
         # succeeded or not.  With Python 2.4, this means that we will move
         # into asyncore.loop(), and if the connect does fail, have a
         # loop something like 'while True: log(error)', which fills up
-        # stdout very fast.
+        # stdout very fast.  Non-blocking is also a problem for ssl sockets.
         self.socket.setblocking(1)
         try:
             self.connect((serverName, serverPort))
@@ -177,8 +169,49 @@ class ServerLineReader(Dibbler.BrighterAsyncChat):
             self.lineCallback('')   # "The socket's been closed."
             self.close()
         else:
+            if ssl:
+                try:
+                    self.ssl_socket = socket.ssl(self.socket)
+                except socket.sslerror, why:
+                    if why[0] == 1: # error:140770FC:SSL routines:SSL23_GET_SERVER_HELLO:unknown protocol'
+                        # Probably not SSL after all.
+                        print >> sys.stderr, "Can't use SSL"
+                    else:
+                        raise
+                else:
+                    self.send = self.send_ssl
+                    self.recv = self.recv_ssl
             self.socket.setblocking(0)
             
+    def send_ssl(self, data):
+        return self.ssl_socket.write(data)
+
+    def handle_expt(self):
+        # Python 2.4's system of continuously pumping error messages
+        # is stupid.  Print an error once, and then ignore.
+        if not self.handled_exception:
+            print >> sys.stderr, "Unhandled exception in ServerLineReader"
+            self.handled_exception = True
+
+    def recv_ssl(self, buffer_size):
+        try:
+            data = self.ssl_socket.read(buffer_size)
+            if not data:
+                # a closed connection is indicated by signaling
+                # a read condition, and having recv() return 0.
+                self.handle_close()
+                return ''
+            else:
+                return data
+        except socket.sslerror, why:
+            if why[0] == 6: # 'TLS/SSL connection has been closed'
+                self.handle_close()
+                return ''
+            elif why[0] == 2: # 'The operation did not complete (read)'
+                return ''
+            else:
+                raise
+
     def collect_incoming_data(self, data):
         self.request = self.request + data
 
@@ -189,6 +222,10 @@ class ServerLineReader(Dibbler.BrighterAsyncChat):
     def handle_close(self):
         self.lineCallback('')
         self.close()
+        try:
+            del self.ssl_socket
+        except AttributeError:
+            pass
 
 
 class POP3ProxyBase(Dibbler.BrighterAsyncChat):
@@ -204,7 +241,8 @@ class POP3ProxyBase(Dibbler.BrighterAsyncChat):
     server).
     """
 
-    def __init__(self, clientSocket, serverName, serverPort):
+    def __init__(self, clientSocket, serverName, serverPort,
+                 ssl=False, map=Dibbler._defaultContext._map):
         Dibbler.BrighterAsyncChat.__init__(self, clientSocket)
         self.request = ''
         self.response = ''
@@ -223,7 +261,7 @@ class POP3ProxyBase(Dibbler.BrighterAsyncChat):
             return
 
         self.serverSocket = ServerLineReader(serverName, serverPort,
-                                             self.onServerLine)
+                                             self.onServerLine, ssl, map)
 
     def onIncomingConnection(self, clientSocket):
         """Checks the security settings."""
@@ -235,7 +273,7 @@ class POP3ProxyBase(Dibbler.BrighterAsyncChat):
         if trustedIPs == "*" or remoteIP == clientSocket.getsockname()[0]:
             return True
 
-        trustedIPs = trustedIPs.replace('.', '\.').replace('*', '([01]?\d\d?|2[04]\d|25[0-5])')
+        trustedIPs = trustedIPs.replace('.', '\.').replace('*', '([01]?\d\d?|2[0-4]\d|25[0-5])')
         for trusted in trustedIPs.split(','):
             if re.search("^" + trusted + "$", remoteIP):
                 return True
@@ -266,11 +304,13 @@ class POP3ProxyBase(Dibbler.BrighterAsyncChat):
             self.push(self.response)
             self.response = ''
 
-        # Time out after 30 seconds for message-retrieval commands if
-        # all the headers are down.  The rest of the message will proxy
-        # straight through.
+        # Time out after some seconds (30 by default) for message-retrieval
+        # commands if all the headers are down.  The rest of the message
+        # will proxy straight through.
+        # See also [ 870524 ] Make the message-proxy timeout configurable
         if self.command in ['TOP', 'RETR'] and \
-           self.seenAllHeaders and time.time() > self.startTime + 30:
+           self.seenAllHeaders and time.time() > \
+           self.startTime + options["pop3proxy", "retrieval_timeout"]:
             self.onResponse()
             self.response = ''
         # If that's a complete response, handle it.
@@ -311,8 +351,7 @@ class POP3ProxyBase(Dibbler.BrighterAsyncChat):
             raise SystemExit
         elif verb == 'CRASH':
             # For testing
-            x = 0
-            y = 1/x
+            raise ZeroDivisionError
 
         self.serverSocket.push(self.request + '\r\n')
         if self.request.strip() == '':
@@ -329,11 +368,12 @@ class POP3ProxyBase(Dibbler.BrighterAsyncChat):
         self.request = ''
 
     def onResponse(self):
-        # We don't support pipelining, so if the command is CAPA and the
-        # response includes PIPELINING, hack out that line of the response.
-        if self.command == 'CAPA':
-            pipelineRE = r'(?im)^PIPELINING[^\n]*\n'
-            self.response = re.sub(pipelineRE, '', self.response)
+        # There are some features, tested by clients using CAPA,
+        # that we don't support.  We strip them from the CAPA
+        # response here, so that the client won't use them.
+        for unsupported in ['PIPELINING', 'STLS', ]:
+            unsupportedLine = r'(?im)^%s[^\n]*\n' % (unsupported,)
+            self.response = re.sub(unsupportedLine, '', self.response)
 
         # Pass the request and the raw response to the subclass and
         # send back the cooked response.
@@ -358,8 +398,8 @@ class BayesProxyListener(Dibbler.Listener):
     BayesProxy objects to serve them.
     """
 
-    def __init__(self, serverName, serverPort, proxyPort):
-        proxyArgs = (serverName, serverPort)
+    def __init__(self, serverName, serverPort, proxyPort, ssl=False):
+        proxyArgs = (serverName, serverPort, ssl)
         Dibbler.Listener.__init__(self, proxyPort, BayesProxy, proxyArgs)
         print 'Listener on port %s is proxying %s:%d' % \
                (_addressPortStr(proxyPort), serverName, serverPort)
@@ -397,8 +437,9 @@ class BayesProxy(POP3ProxyBase):
           expires any old messages in the three caches.
     """
 
-    def __init__(self, clientSocket, serverName, serverPort):
-        POP3ProxyBase.__init__(self, clientSocket, serverName, serverPort)
+    def __init__(self, clientSocket, serverName, serverPort, ssl=False):
+        POP3ProxyBase.__init__(self, clientSocket, serverName, serverPort,
+                               ssl)
         self.handlers = {'STAT': self.onStat, 'LIST': self.onList,
                          'RETR': self.onRetr, 'TOP': self.onTop,
                          'USER': self.onUser}
@@ -481,112 +522,106 @@ class BayesProxy(POP3ProxyBase):
     def onRetr(self, command, args, response):
         """Adds the judgement header based on the raw headers and body
         of the message."""
-        # Use '\n\r?\n' to detect the end of the headers in case of
-        # broken emails that don't use the proper line separators.
-        if re.search(r'\n\r?\n', response):
-            # Remove the trailing .\r\n before passing to the email parser.
-            # Thanks to Scott Schlesier for this fix.
-            terminatingDotPresent = (response[-4:] == '\n.\r\n')
-            if terminatingDotPresent:
-                response = response[:-3]
+        # Previously, we used '\n\r?\n' to detect the end of the headers in
+        # case of broken emails that don't use the proper line separators,
+        # and if we couldn't find it, then we assumed that the response was
+        # and error response and passed it unfiltered.  However, if the
+        # message doesn't contain the separator (malformed mail), then this
+        # would mean the message was passed straight through the proxy.
+        # Since all the content is then in the headers, this probably
+        # doesn't do a spammer much good, but, just in case, we now just
+        # check for "+OK" and assume no error response will be given if
+        # that is (which seems reasonable).
+        # Remove the trailing .\r\n before passing to the email parser.
+        # Thanks to Scott Schlesier for this fix.
+        terminatingDotPresent = (response[-4:] == '\n.\r\n')
+        if terminatingDotPresent:
+            response = response[:-3]
 
-            # Break off the first line, which will be '+OK'.
-            ok, messageText = response.split('\n', 1)
-
-            try:
-                msg = spambayes.message.SBHeaderMessage()
-                msg.setPayload(messageText)
-                msg.setId(state.getNewMessageName())
-                # Now find the spam disposition and add the header.
-                (prob, clues) = state.bayes.spamprob(msg.asTokens(),\
-                                 evidence=True)
-
-                msg.addSBHeaders(prob, clues)
-
-                # Check for "RETR" or "TOP N 99999999" - fetchmail without
-                # the 'fetchall' option uses the latter to retrieve messages.
-                if (command == 'RETR' or
-                    (command == 'TOP' and
-                     len(args) == 2 and args[1] == '99999999')):
-                    cls = msg.GetClassification()
-                    if cls == options["Headers", "header_ham_string"]:
-                        state.numHams += 1
-                    elif cls == options["Headers", "header_spam_string"]:
-                        state.numSpams += 1
-                    else:
-                        state.numUnsure += 1
-
-                    # Suppress caching of "Precedence: bulk" or
-                    # "Precedence: list" ham if the options say so.
-                    isSuppressedBulkHam = \
-                        (cls == options["Headers", "header_ham_string"] and
-                         options["Storage", "no_cache_bulk_ham"] and
-                         msg.get('precedence') in ['bulk', 'list'])
-
-                    # Suppress large messages if the options say so.
-                    size_limit = options["Storage",
-                                         "no_cache_large_messages"]
-                    isTooBig = size_limit > 0 and \
-                               len(messageText) > size_limit
-
-                    # Cache the message.  Don't pollute the cache with test
-                    # messages or suppressed bulk ham.
-                    if (not state.isTest and
-                        options["Storage", "cache_messages"] and
-                        not isSuppressedBulkHam and not isTooBig):
-                        # Write the message into the Unknown cache.
-                        message = state.unknownCorpus.makeMessage(msg.getId())
-                        message.setPayload(msg.as_string())
-                        state.unknownCorpus.addMessage(message)
-
-                # We'll return the message with the headers added.  We take
-                # all the headers from the SBHeaderMessage, but take the body
-                # directly from the POP3 conversation, because the
-                # SBHeaderMessage might have "fixed" a partial message by
-                # appending a closing boundary separator.  Remember we can
-                # be dealing with partial message here because of the timeout
-                # code in onServerLine.
-                headers = []
-                for name, value in msg.items():
-                    header = "%s: %s" % (name, value)
-                    headers.append(re.sub(r'\r?\n', '\r\n', header))
-                body = re.split(r'\n\r?\n', messageText, 1)[1]
-                messageText = "\r\n".join(headers) + "\r\n\r\n" + body
-            except:
-                # Something nasty happened while parsing or classifying -
-                # report the exception in a hand-appended header and recover.
-                # This is one case where an unqualified 'except' is OK, 'cos
-                # anything's better than destroying people's email...
-                stream = cStringIO.StringIO()
-                traceback.print_exc(None, stream)
-                details = stream.getvalue()
-
-                # Build the header.  This will strip leading whitespace from
-                # the lines, so we add a leading dot to maintain indentation.
-                detailLines = details.strip().split('\n')
-                dottedDetails = '\n.'.join(detailLines)
-                headerName = 'X-Spambayes-Exception'
-                header = Header(dottedDetails, header_name=headerName)
-
-                # Insert the header, converting email.Header's '\n' line
-                # breaks to POP3's '\r\n'.
-                headers, body = re.split(r'\n\r?\n', messageText, 1)
-                header = re.sub(r'\r?\n', '\r\n', str(header))
-                headers += "\n%s: %s\r\n\r\n" % (headerName, header)
-                messageText = headers + body
-
-                # Print the exception and a traceback.
-                print >>sys.stderr, details
-
-            # Restore the +OK and the POP3 .\r\n terminator if there was one.
-            retval = ok + "\n" + messageText
-            if terminatingDotPresent:
-                retval += '.\r\n'
-            return retval
-
-        else:
-            # Must be an error response.
+        # Break off the first line, which will be '+OK'.
+        statusLine, messageText = response.split('\n', 1)
+        statusData = statusLine.split()
+        ok = statusData[0]
+        if ok.strip().upper() != "+OK":
+            # Must be an error response.  Return unproxied.
             return response
+
+        try:
+            msg = email.message_from_string(messageText,
+                      _class=spambayes.message.SBHeaderMessage)
+            msg.setId(state.getNewMessageName())
+            # Now find the spam disposition and add the header.
+            (prob, clues) = state.bayes.spamprob(msg.tokenize(),
+                                                 evidence=True)
+
+            msg.addSBHeaders(prob, clues)
+
+            # Check for "RETR" or "TOP N 99999999" - fetchmail without
+            # the 'fetchall' option uses the latter to retrieve messages.
+            if (command == 'RETR' or
+                (command == 'TOP' and
+                 len(args) == 2 and args[1] == '99999999')):
+                cls = msg.GetClassification()
+                state.RecordClassification(cls, prob)
+
+                # Suppress caching of "Precedence: bulk" or
+                # "Precedence: list" ham if the options say so.
+                isSuppressedBulkHam = \
+                    (cls == options["Headers", "header_ham_string"] and
+                     options["Storage", "no_cache_bulk_ham"] and
+                     msg.get('precedence') in ['bulk', 'list'])
+
+                # Suppress large messages if the options say so.
+                size_limit = options["Storage",
+                                     "no_cache_large_messages"]
+                isTooBig = size_limit > 0 and \
+                           len(messageText) > size_limit
+
+                # Cache the message.  Don't pollute the cache with test
+                # messages or suppressed bulk ham.
+                if (not state.isTest and
+                    options["Storage", "cache_messages"] and
+                    not isSuppressedBulkHam and not isTooBig):
+                    # Write the message into the Unknown cache.
+                    makeMessage = state.unknownCorpus.makeMessage
+                    message = makeMessage(msg.getId(), msg.as_string())
+                    state.unknownCorpus.addMessage(message)
+
+            # We'll return the message with the headers added.  We take
+            # all the headers from the SBHeaderMessage, but take the body
+            # directly from the POP3 conversation, because the
+            # SBHeaderMessage might have "fixed" a partial message by
+            # appending a closing boundary separator.  Remember we can
+            # be dealing with partial message here because of the timeout
+            # code in onServerLine.
+            headers = []
+            for name, value in msg.items():
+                header = "%s: %s" % (name, value)
+                headers.append(re.sub(r'\r?\n', '\r\n', header))
+            try:
+                body = re.split(r'\n\r?\n', messageText, 1)[1]
+            except IndexError:
+                # No separator, so no body.  Bad message, but proxy it
+                # through anyway (adding the missing separator).
+                messageText = "\r\n".join(headers) + "\r\n\r\n"
+            else:
+                messageText = "\r\n".join(headers) + "\r\n\r\n" + body
+        except:
+            # Something nasty happened while parsing or classifying -
+            # report the exception in a hand-appended header and recover.
+            # This is one case where an unqualified 'except' is OK, 'cos
+            # anything's better than destroying people's email...
+            messageText, details = spambayes.message.\
+                                   insert_exception_header(messageText)
+
+            # Print the exception and a traceback.
+            print >> sys.stderr, details
+
+        # Restore the +OK and the POP3 .\r\n terminator if there was one.
+        retval = ok + "\n" + messageText
+        if terminatingDotPresent:
+            retval += '.\r\n'
+        return retval
 
     def onTop(self, command, args, response):
         """Adds the judgement header based on the raw headers and as
@@ -610,9 +645,9 @@ class BayesProxy(POP3ProxyBase):
 # Implementations of a mutex or other resource which can prevent
 # multiple servers starting at once.  Platform specific as no reasonable
 # cross-platform solution exists (however, an old trick is to use a
-# directory for a mutex, as a "create/test" atomic API generally exists.
+# directory for a mutex, as a "create/test" atomic API generally exists).
 # Will return a handle to be later closed, or may throw AlreadyRunningException
-def open_platform_mutex():
+def open_platform_mutex(mutex_name="SpamBayesServer"):
     if sys.platform.startswith("win"):
         try:
             import win32event, win32api, winerror, win32con
@@ -627,7 +662,6 @@ def open_platform_mutex():
             # should consider still creating a non-exclusive
             # "SpamBayesServer" mutex, if for no better reason than so
             # an installer can check if we are running
-            mutex_name = "SpamBayesServer"
             try:
                 hmutex = win32event.CreateMutex(None, True, mutex_name)
             except win32event.error, details:
@@ -664,6 +698,7 @@ class State:
         self.bayes = None
         self.platform_mutex = None
         self.prepared = False
+        self.can_stop = True
         self.init()
 
         # Load up the other settings from Option.py / bayescustomize.ini
@@ -676,23 +711,44 @@ class State:
 
     def init(self):
         assert not self.prepared, "init after prepare, but before close"
+        # Load the environment for translation.
+        self.lang_manager = i18n.LanguageManager()
+        # Set the system user default language.
+        self.lang_manager.set_language(\
+            self.lang_manager.locale_default_lang())
+        # Set interface to use the user language in the configuration file.
+        for language in reversed(options["globals", "language"]):
+            # We leave the default in there as the last option, to fall
+            # back on if necessary.
+            self.lang_manager.add_language(language)
+        if options["globals", "verbose"]:
+            print "Asked to add languages: " + \
+                  ", ".join(options["globals", "language"])
+            print "Set language to " + \
+                  str(self.lang_manager.current_langs_codes)
+
         # Open the log file.
         if options["globals", "verbose"]:
             self.logFile = open('_pop3proxy.log', 'wb', 0)
-        self.servers = []
-        self.proxyPorts = []
-        if options["pop3proxy", "remote_servers"]:
-            for server in options["pop3proxy", "remote_servers"]:
-                server = server.strip()
-                if server.find(':') > -1:
-                    server, port = server.split(':', 1)
-                else:
-                    port = '110'
-                self.servers.append((server, int(port)))
 
-        if options["pop3proxy", "listen_ports"]:
-            splitPorts = options["pop3proxy", "listen_ports"]
-            self.proxyPorts = map(_addressAndPort, splitPorts)
+        if not hasattr(self, "servers"):
+            # Could have already been set via the command line.
+            self.servers = []
+            if options["pop3proxy", "remote_servers"]:
+                for server in options["pop3proxy", "remote_servers"]:
+                    server = server.strip()
+                    if server.find(':') > -1:
+                        server, port = server.split(':', 1)
+                    else:
+                        port = '110'
+                    self.servers.append((server, int(port)))
+
+        if not hasattr(self, "proxyPorts"):
+            # Could have already been set via the command line.
+            self.proxyPorts = []
+            if options["pop3proxy", "listen_ports"]:
+                splitPorts = options["pop3proxy", "listen_ports"]
+                self.proxyPorts = map(_addressAndPort, splitPorts)
 
         if len(self.servers) != len(self.proxyPorts):
             print "pop3proxy_servers & pop3proxy_ports are different lengths!"
@@ -721,6 +777,11 @@ class State:
                 state.bayes.store()
             self.bayes.close()
             self.bayes = None
+        if self.mdb is not None:
+            self.mdb.store()
+            self.mdb.close()
+            self.mdb = None
+            spambayes.message.Message().message_info_db = None
 
         self.spamCorpus = self.hamCorpus = self.unknownCorpus = None
         self.spamTrainer = self.hamTrainer = None
@@ -729,10 +790,16 @@ class State:
         close_platform_mutex(self.platform_mutex)
         self.platform_mutex = None
 
-    def prepare(self):
+    def prepare(self, can_stop=True):
+        """Do whatever needs to be done to prepare for running.  If
+        can_stop is False, then we may not let the user shut down the
+        proxy - for example, running as a Windows service this should
+        be the case."""
         # If we can, prevent multiple servers from running at the same time.
         assert self.platform_mutex is None, "Should not already have the mutex"
         self.platform_mutex = open_platform_mutex()
+
+        self.can_stop = can_stop
 
         # Do whatever we've been asked to do...
         self.createWorkers()
@@ -752,26 +819,40 @@ class State:
         nham = self.bayes.nham
         if nspam > 10 and nham > 10:
             db_ratio = nham/float(nspam)
-            big = small = None
             if db_ratio > 5.0:
-                big = "ham"
-                small = "spam"
+                self.warning = _("Warning: you have much more ham than " \
+                                 "spam - SpamBayes works best with " \
+                                 "approximately even numbers of ham and " \
+                                 "spam.")
             elif db_ratio < (1/5.0):
-                big = "spam"
-                small = "ham"
-            if big is not None:
-                self.warning = "Warning: you have much more %s than %s - " \
-                               "SpamBayes works best with approximately even " \
-                               "numbers of ham and spam." % (big, small)
+                self.warning = _("Warning: you have much more spam than " \
+                                 "ham - SpamBayes works best with " \
+                                 "approximately even numbers of ham and " \
+                                 "spam.")
             else:
                 self.warning = ""
         elif nspam > 0 or nham > 0:
-            self.warning = "Database only has %d good and %d spam - you should " \
-                           "consider performing additional training." % (nham, nspam)
+            self.warning = _("Database only has %d good and %d spam - " \
+                             "you should consider performing additional " \
+                             "training.") % (nham, nspam)
         else:
-            self.warning = "Database has no training information.  SpamBayes " \
-                           "will classify all messages as 'unsure', " \
-                           "ready for you to train."
+            self.warning = _("Database has no training information.  " \
+                             "SpamBayes will classify all messages as " \
+                             "'unsure', ready for you to train.")
+        # Add an additional warning message if the user's thresholds are
+        # truly odd.
+        spam_cut = options["Categorization", "spam_cutoff"]
+        ham_cut = options["Categorization", "ham_cutoff"]
+        if spam_cut < 0.5:
+            self.warning += _("<br/>Warning: we do not recommend " \
+                              "setting the spam threshold less than 0.5.")
+        if ham_cut > 0.5:
+            self.warning += _("<br/>Warning: we do not recommend " \
+                              "setting the ham threshold greater than 0.5.")
+        if ham_cut > spam_cut:
+            self.warning += _("<br/>Warning: your ham threshold is " \
+                              "<b>higher</b> than your spam threshold. " \
+                              "Results are unpredictable.")
 
     def createWorkers(self):
         """Using the options that were initialised in __init__ and then
@@ -784,25 +865,22 @@ class State:
         if not hasattr(self, "DBName"):
             self.DBName, self.useDB = storage.database_type([])
         self.bayes = storage.open_storage(self.DBName, self.useDB)
-        
+        self.mdb = spambayes.message.Message().message_info_db
+
+        # Load stats manager.
+        self.stats = Stats.Stats(options, self.mdb)
+
         self.buildStatusStrings()
 
         # Don't set up the caches and training objects when running the self-test,
         # so as not to clutter the filesystem.
         if not self.isTest:
-            def ensureDir(dirname):
-                try:
-                    os.mkdir(dirname)
-                except OSError, e:
-                    if e.errno != errno.EEXIST:
-                        raise
-
             # Create/open the Corpuses.  Use small cache sizes to avoid hogging
             # lots of memory.
             sc = get_pathname_option("Storage", "spam_cache")
             hc = get_pathname_option("Storage", "ham_cache")
             uc = get_pathname_option("Storage", "unknown_cache")
-            map(ensureDir, [sc, hc, uc])
+            map(storage.ensureDir, [sc, hc, uc])
             if self.gzipCache:
                 factory = GzipFileMessageFactory()
             else:
@@ -845,6 +923,22 @@ class State:
             self.uniquifier = 2
         return messageName
 
+    def RecordClassification(self, cls, score):
+        """Record the classification in the session statistics.
+
+        cls should match one of the options["Headers", "header_*_string"]
+        values.
+
+        score is the score the message received.        
+        """
+        if cls == options["Headers", "header_ham_string"]:
+            self.numHams += 1
+        elif cls == options["Headers", "header_spam_string"]:
+            self.numSpams += 1
+        else:
+            self.numUnsure += 1
+        self.stats.RecordClassification(score)
+
 
 # Option-parsing helper functions
 def _addressAndPort(s):
@@ -869,12 +963,13 @@ proxyListeners = []
 def _createProxies(servers, proxyPorts):
     """Create BayesProxyListeners for all the given servers."""
     for (server, serverPort), proxyPort in zip(servers, proxyPorts):
-        listener = BayesProxyListener(server, serverPort, proxyPort)
+        ssl = options["pop3proxy", "use_ssl"]
+        if ssl == "automatic":
+            ssl = serverPort == 995
+        listener = BayesProxyListener(server, serverPort, proxyPort, ssl)
         proxyListeners.append(listener)
 
 def _recreateState():
-    global state
-
     # Close the existing listeners and create new ones.  This won't
     # affect any running proxies - once a listener has created a proxy,
     # that proxy is then independent of it.
@@ -883,8 +978,9 @@ def _recreateState():
         proxy.close()
     del proxyListeners[:]
 
-    # Close the state (which saves if necessary)
-    state.close()
+    if state.prepared:    
+        # Close the state (which saves if necessary)
+        state.close()
     # And get a new one going.
     state = State()
 
@@ -901,9 +997,9 @@ def main(servers, proxyPorts, uiPort, launchUI):
     httpServer.register(proxyUI)
     Dibbler.run(launchBrowser=launchUI)
 
-def prepare():
+def prepare(can_stop=True):
     state.init()
-    state.prepare()
+    state.prepare(can_stop)
     # Launch any SMTP proxies.  Note that if the user hasn't specified any
     # SMTP proxy information in their configuration, then nothing will
     # happen.
@@ -928,7 +1024,7 @@ def stop():
     # any open proxy connections to complete, etc.
     from urllib import urlopen, urlencode
     urlopen('http://localhost:%d/save' % state.uiPort,
-            urlencode({'how': 'Save & shutdown'})).read()
+            urlencode({'how': _('Save & shutdown')})).read()
 
 
 # ===================================================================
@@ -941,18 +1037,19 @@ def run():
     try:
         opts, args = getopt.getopt(sys.argv[1:], 'hbd:p:l:u:o:')
     except getopt.error, msg:
-        print >>sys.stderr, str(msg) + '\n\n' + __doc__
+        print >> sys.stderr, str(msg) + '\n\n' + __doc__
         sys.exit()
 
-    runSelfTest = False
     for opt, arg in opts:
         if opt == '-h':
-            print >>sys.stderr, __doc__
+            print >> sys.stderr, __doc__
             sys.exit()
         elif opt == '-b':
             state.launchUI = True
+        # '-p' and '-d' are handled by the storage.database_type call
+        # below, in case you are wondering why they are missing.
         elif opt == '-l':
-            state.proxyPorts = [_addressAndPort(arg)]
+            state.proxyPorts = [_addressAndPort(a) for a in arg.split(',')]
         elif opt == '-u':
             state.uiPort = int(arg)
         elif opt == '-o':
@@ -961,8 +1058,8 @@ def run():
     state.DBName, state.useDB = storage.database_type(opts)
 
     # Let the user know what they are using...
-    print get_version_string("POP3 Proxy")
-    print "and engine %s.\n" % (get_version_string(),)
+    v = get_current_version()
+    print "%s\n" % (v.get_long_version("SpamBayes POP3 Proxy"),)
 
     if 0 <= len(args) <= 2:
         # Normal usage, with optional server name and port number.
@@ -978,14 +1075,14 @@ def run():
         try:
             prepare()
         except AlreadyRunningException:
-            print  >>sys.stderr, \
+            print  >> sys.stderr, \
                    "ERROR: The proxy is already running on this machine."
-            print  >>sys.stderr, "Please stop the existing proxy and try again"
+            print  >> sys.stderr, "Please stop the existing proxy and try again"
             return
         start()
 
     else:
-        print >>sys.stderr, __doc__
+        print >> sys.stderr, __doc__
 
 if __name__ == '__main__':
     run()

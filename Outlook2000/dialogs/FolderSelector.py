@@ -19,13 +19,6 @@ def INDEXTOSTATEIMAGEMASK(i): # from new commctrl.h
 IIL_UNCHECKED = 1
 IIL_CHECKED = 2
 
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-
-
 # Helpers for building the folder list
 class FolderSpec:
     def __init__(self, folder_id, name, ignore_eids = None):
@@ -686,7 +679,7 @@ class FolderSelector(FolderSelector_Parent):
         format = "iii"
         buf = win32gui.PyMakeBuffer(struct.calcsize(format), lparam)
         hwndFrom, id, code = struct.unpack(format, buf)
-        code += 0x4f0000 # hrm - wtf - commctrl uses this, and it works with mfc.  *sigh*
+        code += commctrl.PY_0U # work around silly old pywin32 bug
         id_name = self._GetIDName(id)
         if id_name == "IDC_LIST_FOLDERS":
             if code == commctrl.NM_CLICK:

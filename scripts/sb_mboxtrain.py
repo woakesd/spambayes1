@@ -42,12 +42,6 @@ Where OPTIONS is one or more of:
         set [section, option] in the options database to value
 """
 
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-
 import sys, os, getopt, email
 import shutil
 from spambayes import hammie, storage, mboxutils
@@ -111,7 +105,8 @@ def msg_train(h, msg, is_spam, force):
 def maildir_train(h, path, is_spam, force, removetrained):
     """Train bayes with all messages from a maildir."""
 
-    if loud: print "  Reading %s as Maildir" % (path,)
+    if loud:
+        print "  Reading %s as Maildir" % (path,)
 
     import time
     import socket
@@ -162,7 +157,8 @@ def maildir_train(h, path, is_spam, force, removetrained):
 def mbox_train(h, path, is_spam, force):
     """Train bayes with a Unix mbox"""
 
-    if loud: print "  Reading as Unix mbox"
+    if loud:
+        print "  Reading as Unix mbox"
 
     import mailbox
     import fcntl
@@ -219,7 +215,8 @@ def mbox_train(h, path, is_spam, force):
 def mhdir_train(h, path, is_spam, force):
     """Train bayes with an mh directory"""
 
-    if loud: print "  Reading as MH mailbox"
+    if loud:
+        print "  Reading as MH mailbox"
 
     import glob
 
@@ -331,13 +328,15 @@ def main():
     h = hammie.open(pck, usedb, "c")
 
     for g in good:
-        if loud: print "Training ham (%s):" % g
+        if loud:
+            print "Training ham (%s):" % g
         train(h, g, False, force, trainnew, removetrained)
         sys.stdout.flush()
         save = True
 
     for s in spam:
-        if loud: print "Training spam (%s):" % s
+        if loud:
+            print "Training spam (%s):" % s
         train(h, s, True, force, trainnew, removetrained)
         sys.stdout.flush()
         save = True

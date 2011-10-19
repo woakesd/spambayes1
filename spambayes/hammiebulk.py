@@ -37,20 +37,12 @@ Where:
         Only meaningful with the -u option.
 """
 
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-    def bool(val):
-        return not not val
-
 import sys
 import os
 import getopt
 
 from spambayes.Options import options, get_pathname_option
-from spambayes import classifier, mboxutils, hammie, Corpus, storage
+from spambayes import mboxutils, hammie, Corpus, storage
 
 Corpus.Verbose = True
 

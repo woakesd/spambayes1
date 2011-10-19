@@ -24,6 +24,8 @@ Options:
     -n N
         The number of output mboxes desired.  This is required.
 
+    -d  Eliminate duplicates.
+
 Arguments:
     sourcembox
         The mbox or path to an mbox to split.
@@ -47,19 +49,11 @@ that while the split is random, it's reproducible.
 import sys
 import os
 import random
-import mailbox
-import email
 import getopt
 import glob
 
 from spambayes import mboxutils
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-
+from spambayes.port import md5
 
 program = sys.argv[0]
 
@@ -71,13 +65,14 @@ def usage(code, msg=''):
 
 def main():
     try:
-        opts, args = getopt.getopt(sys.argv[1:], 'hgn:s:v', ['help'])
+        opts, args = getopt.getopt(sys.argv[1:], 'dhgn:s:v', ['help'])
     except getopt.error, msg:
         usage(1, msg)
 
     doglob = False
     n = None
     verbose = False
+    delete_dups = False
     for opt, arg in opts:
         if opt in ('-h', '--help'):
             usage(0)
@@ -89,6 +84,8 @@ def main():
             n = int(arg)
         elif opt == '-v':
             verbose = True
+        elif opt == '-d':
+            delete_dups = True
 
     if n is None or n <= 1:
         usage(1, "an -n value > 1 is required")
@@ -103,6 +100,8 @@ def main():
             os.makedirs(dir)
 
     counter = 0
+    cksums = set()
+    skipped = 0
     for inputpath in inputpaths:
         if doglob:
             inpaths = glob.glob(inputpath)
@@ -112,8 +111,13 @@ def main():
         for inpath in inpaths:
             mbox = mboxutils.getmbox(inpath)
             for msg in mbox:
-                i = random.randrange(n)
                 astext = str(msg)
+                cksum = md5(astext).hexdigest()
+                if delete_dups and cksum in cksums:
+                    skipped += 1
+                    continue
+                cksums.add(cksum)
+                i = random.randrange(n)
                 #assert astext.endswith('\n')
                 counter += 1
                 msgfile = open('%s/%d' % (outdirs[i], counter), 'wb')
@@ -127,6 +131,8 @@ def main():
     if verbose:
         print
         print counter, "messages split into", n, "directories"
+        if skipped:
+            print "skipped", skipped, "duplicate messages"
 
 if __name__ == '__main__':
     main()

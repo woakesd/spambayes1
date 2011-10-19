@@ -2,12 +2,20 @@ from __future__ import generators
 
 import sys, os, re
 import locale
+from time import timezone
+
+import email
+from email.MIMEImage import MIMEImage
+from email.Message import Message
+from email.MIMEMultipart import MIMEMultipart
+from email.MIMEText import MIMEText
+from email.Parser import HeaderParser
+from email.Utils import formatdate
 
 try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
+    from cStringIO import StringIO
+except ImportError:
+    from StringIO import StringIO
 
 # MAPI imports etc.
 from win32com.client import Dispatch, constants
@@ -16,11 +24,6 @@ from win32com.mapi.mapitags import *
 import pythoncom
 import winerror
 
-try:
-    PR_USERFIELDS # only in new win32all
-except NameError:
-    PR_USERFIELDS = 0x36E30102 # PROP_TAG(PT_BINARY, 0x36e3)
-
 # Additional MAPI constants we dont have in Python
 MESSAGE_MOVE = 0x1 # from MAPIdefs.h
 MSGFLAG_READ = 0x1 # from MAPIdefs.h
@@ -28,11 +31,14 @@ MSGFLAG_UNSENT = 0x00000008
 
 MYPR_BODY_HTML_A = 0x1013001e # magic <wink>
 MYPR_BODY_HTML_W = 0x1013001f # ditto
+MYPR_MESSAGE_ID_A = 0x1035001E # more magic (message id field used for Exchange)
 
 CLEAR_READ_FLAG = 0x00000004
 CLEAR_RN_PENDING = 0x00000020
 CLEAR_NRN_PENDING = 0x00000040
 SUPPRESS_RECEIPT = 0x1
+
+FOLDER_DIALOG = 0x00000002
 
 USE_DEFERRED_ERRORS = mapi.MAPI_DEFERRED_ERRORS # or set to zero to see what changes <wink>
 
@@ -146,17 +152,17 @@ def IsReadOnlyCOMException(exc_val):
 def ReportMAPIError(manager, what, exc_val):
     hr, exc_msg, exc, arg_err = exc_val
     if hr == mapi.MAPI_E_TABLE_TOO_BIG:
-        err_msg = what + " failed as one of your\r\n" \
+        err_msg = what + _(" failed as one of your\r\n" \
                     "Outlook folders is full.  Futher operations are\r\n" \
                     "likely to fail until you clean up this folder.\r\n\r\n" \
                     "This message will not be reported again until SpamBayes\r\n"\
-                    "is restarted."
+                    "is restarted.")
     else:
-        err_msg = what + " failed due to an unexpected Outlook error.\r\n" \
-                  + GetCOMExceptionString(exc_val) + "\r\n\r\n" \
-                  "It is recommended you restart Outlook at the earliest opportunity\r\n\r\n" \
-                  "This message will not be reported again until SpamBayes\r\n"\
-                  "is restarted."
+        err_msg = what + _(" failed due to an unexpected Outlook error.\r\n") \
+                  + GetCOMExceptionString(exc_val) + "\r\n\r\n" + \
+                  _("It is recommended you restart Outlook at the earliest opportunity\r\n\r\n" \
+                    "This message will not be reported again until SpamBayes\r\n"\
+                    "is restarted.")
     manager.ReportErrorOnce(err_msg)
 
 # Our objects.
@@ -645,6 +651,26 @@ class MAPIMsgStoreFolder:
         ret = folder.CreateFolder(type, name, comments, None, flags)
         return self._FolderFromMAPIFolder(ret)
 
+    def GetItemCount(self):
+        try:
+            folder = self.OpenEntry()
+            return folder.GetContentsTable(0).GetRowCount(0)
+        except pythoncom.com_error, details:
+            raise MsgStoreExceptionFromCOMException(details)
+        
+    # EmptyFolder() *permanently* deletes ALL messages and subfolders from
+    # this folder without deleting the folder itself.
+    #
+    # WORD OF WARNING:  This is a *very dangerous* function that has the
+    # potential to destroy a user's mail.  Don't even *think* about calling
+    # this function on anything but the Certain Spam folder!
+    def EmptyFolder(self, parentWindow):
+        try:
+            folder = self.OpenEntry()
+            folder.EmptyFolder(parentWindow, None, FOLDER_DIALOG)
+        except pythoncom.com_error, details:
+            raise MsgStoreExceptionFromCOMException(details)
+
     def DoesFolderHaveOutlookField(self, field_name):
         # Returns True if the specified folder has an *Outlook* field with
         # the given name, False if the folder does not have it, or None
@@ -699,7 +725,7 @@ class MAPIMsgStoreFolder:
         try:
             folder = self.msgstore._OpenEntry(self.id)
             # Nuke my MAPI reference, and set my ID to None
-            rc = folder.DeleteMessages(real_ids, 0, None, 0)
+            folder.DeleteMessages(real_ids, 0, None, 0)
         except pythoncom.com_error, details:
             raise MsgStoreExceptionFromCOMException(details)
 
@@ -784,6 +810,18 @@ class MAPIMsgStoreMsg:
         self.was_received = PROP_TYPE(recby_tag) == PT_BINARY or has_headers
         self.dirty = False
 
+        # For use with the spambayes.message messageinfo database.
+        self.stored_attributes = ['c', 't', 'original_folder',
+                                  'date_modified']
+        self.t = None
+        self.c = None
+        self.date_modified = None
+        self.original_folder = None
+
+    def getDBKey(self):
+        # Long lived search key.
+        return self.searchkey
+
     def __repr__(self):
         if self.id is None:
             id_str = "(deleted/moved)"
@@ -848,7 +886,9 @@ class MAPIMsgStoreMsg:
 
     def _GetMessageText(self):
         parts = self._GetMessageTextParts()
-        # parts is (headers, body, html), but could possibly grow
+        # parts is (headers, body, html) - which needs more formalizing -
+        # GetMessageText should become deprecated - it makes no sense in the
+        # face of multi-part messages.
         return "\n".join(parts)
 
     def _GetMessageTextParts(self):
@@ -857,6 +897,9 @@ class MAPIMsgStoreMsg:
         # in an attachment.  Later.
         # Note we *dont* look in plain text attachments, which we arguably
         # should.
+        # This should be refactored into a function that returns the headers,
+        # plus a list of email package sub-objects suitable for sending to
+        # the classifier.
         from spambayes import mboxutils
 
         self._EnsureObject()
@@ -880,17 +923,28 @@ class MAPIMsgStoreMsg:
         # Mail delivered internally via Exchange Server etc may not have
         # headers - fake some up.
         if not headers:
-            headers = self._GetFakeHeaders ()
+            headers = self._GetFakeHeaders()
         # Mail delivered via the Exchange Internet Mail MTA may have
         # gibberish at the start of the headers - fix this.
         elif headers.startswith("Microsoft Mail"):
             headers = "X-MS-Mail-Gibberish: " + headers
+            # This mail typically doesn't have a Received header, which
+            # is a real PITA for running the incremental testing setup.
+            # To make life easier, we add in the fake one that the message
+            # would have got if it had had no headers at all.
+            if headers.find("Received:") == -1:
+                prop_ids = PR_MESSAGE_DELIVERY_TIME
+                hr, data = self.mapi_object.GetProps(prop_ids, 0)
+                value = self._format_received(data[0][1])
+                headers = "Received: %s\n%s" % (value, headers)
 
         if not html and not body:
             # Only ever seen this for "multipart/signed" messages, so
             # without any better clues, just handle this.
             # Find all attachments with
             # PR_ATTACH_MIME_TAG_A=multipart/signed
+            # XXX - see also self._GetAttachmentsToInclude(), which
+            # scans the attachment table - we should consolidate!
             table = self.mapi_object.GetAttachmentTable(0)
             restriction = (mapi.RES_PROPERTY,   # a property restriction
                            (mapi.RELOP_EQ,      # check for equality
@@ -928,7 +982,6 @@ class MAPIMsgStoreMsg:
                 # exactly what we are doing ourselves right here - putting
                 # it into a message object, so we can extract the text, so
                 # we can stick it back into another one.  Ahhhhh.
-                import email
                 msg = email.message_from_string(attach_body)
                 assert msg.is_multipart(), "Should be multi-part: %r" % attach_body
                 # reduce down all sub messages, collecting all text/ subtypes.
@@ -952,19 +1005,66 @@ class MAPIMsgStoreMsg:
 
     def _GetFakeHeaders(self):
         # This is designed to fake up some SMTP headers for messages
-        # on an exchange server that do not have such headers of their own
-        prop_ids = PR_SUBJECT_A, PR_DISPLAY_NAME_A, PR_DISPLAY_TO_A, PR_DISPLAY_CC_A
-        hr, data = self.mapi_object.GetProps(prop_ids,0)
-        subject = self._GetPotentiallyLargeStringProp(prop_ids[0], data[0])
-        sender = self._GetPotentiallyLargeStringProp(prop_ids[1], data[1])
-        to = self._GetPotentiallyLargeStringProp(prop_ids[2], data[2])
-        cc = self._GetPotentiallyLargeStringProp(prop_ids[3], data[3])
+        # on an exchange server that do not have such headers of their own.
+        prop_ids = PR_SUBJECT_A, PR_SENDER_NAME_A, PR_DISPLAY_TO_A, \
+                   PR_DISPLAY_CC_A, PR_MESSAGE_DELIVERY_TIME, \
+                   MYPR_MESSAGE_ID_A, PR_IMPORTANCE, PR_CLIENT_SUBMIT_TIME,
+        hr, data = self.mapi_object.GetProps(prop_ids, 0)
         headers = ["X-Exchange-Message: true"]
-        if subject: headers.append("Subject: "+subject)
-        if sender: headers.append("From: "+sender)
-        if to: headers.append("To: "+to)
-        if cc: headers.append("CC: "+cc)
+        for header, index, potentially_large, format_func in (\
+            ("Subject", 0, True, None),
+            ("From", 1, True, self._format_address),
+            ("To", 2, True, self._format_address),
+            ("CC", 3, True, self._format_address),
+            ("Received", 4, False, self._format_received),
+            ("Message-ID", 5, True, None),
+            ("Importance", 6, False, self._format_importance),
+            ("Date", 7, False, self._format_time),
+            ("X-Mailer", 7, False, self._format_version),
+            ):
+            if potentially_large:
+                value = self._GetPotentiallyLargeStringProp(prop_ids[index],
+                                                            data[index])
+            else:
+                value = data[index][1]
+            if value:
+                if format_func:
+                    value = format_func(value)
+                headers.append("%s: %s" % (header, value))
         return "\n".join(headers) + "\n"
+
+    def _format_received(self, raw):
+        # Fake up a 'received' header.  It's important that the date
+        # is right, so that sort+group.py will work.  The rest is just more
+        # clues for the tokenizer to find.
+        return "(via local Exchange server); %s" % (self._format_time(raw),)
+
+    def _format_time(self, raw):
+        return formatdate(int(raw)-timezone, True)
+
+    def _format_importance(self, raw):
+        # olImportanceHigh = 2, olImportanceLow = 0, olImportanceNormal = 1
+        return {0 : "low", 1 : "normal", 2 : "high"}[raw]
+
+    def _format_version(self, unused):
+        return "Microsoft Exchange Client"
+
+    _address_re = re.compile(r"[()<>,:@!/=; ]")
+    def _format_address(self, raw):
+        # Fudge up something that's in the appropriate form.  We don't
+        # have enough information available to get an actual working
+        # email address.
+        addresses = raw.split(";")
+        formattedAddresses = []
+        for address in addresses:
+            address = address.strip()
+            if address.find("@") >= 0:
+                formattedAddress = address
+            else:
+                formattedAddress = "\"%s\" <%s>" % \
+                        (address, self._address_re.sub('.', address))
+            formattedAddresses.append(formattedAddress)
+        return "; ".join(formattedAddresses)
 
     def _EnsureObject(self):
         if self.mapi_object is None:
@@ -974,7 +1074,178 @@ class MAPIMsgStoreMsg:
             except pythoncom.com_error, details:
                 raise MsgStoreExceptionFromCOMException(details)
 
+    def _GetAttachmentsToInclude(self):
+        # Get the list of attachments to include in the email package
+        # Message object. Currently only images (BUT - consider consolidating
+        # with the attachment handling above for signed messages!)
+        from spambayes.Options import options
+        from spambayes.ImageStripper import image_large_size_attribute
+
+        # For now, we know these are the only 2 options that need attachments.
+        if not options['Tokenizer', 'crack_images'] and \
+           not options['Tokenizer', 'image_size']:
+            return []
+        try:
+            table = self.mapi_object.GetAttachmentTable(0)
+            tags = PR_ATTACH_NUM,PR_ATTACH_MIME_TAG_A,PR_ATTACH_SIZE,PR_ATTACH_DATA_BIN
+            attach_rows = mapi.HrQueryAllRows(table, tags, None, None, 0)
+        except pythoncom.com_error, why:
+            attach_rows = []
+
+        attachments = []
+        # Create a new attachment for each image.
+        for row in attach_rows:
+            attach_num = row[0][1]
+            # mime-tag may not exist - eg, seen on bounce messages
+            mime_tag = None
+            if PROP_TYPE(row[1][0]) != PT_ERROR:
+                mime_tag = row[1][1]
+            # oh - what is the library for this!?
+            if mime_tag:
+                typ, subtyp = mime_tag.split('/', 1)
+                if typ == 'image':
+                    size = row[2][1]
+                    # If it is too big, just write the size.  ImageStripper.py
+                    # checks this attribute.
+                    if size > options["Tokenizer", "max_image_size"]:
+                        sub = MIMEImage(None, subtyp)
+                        setattr(sub, image_large_size_attribute, size)
+                    else:
+                        attach = self.mapi_object.OpenAttach(attach_num,
+                                        None, mapi.MAPI_DEFERRED_ERRORS)
+                        data = GetPotentiallyLargeStringProp(attach,
+                                    PR_ATTACH_DATA_BIN, row[3])
+                        sub = MIMEImage(data, subtyp)
+                    attachments.append(sub)
+        return attachments
+
     def GetEmailPackageObject(self, strip_mime_headers=True):
+        # Return an email.Message object.
+        #
+        # strip_mime_headers is a hack, and should be left True unless you're
+        # trying to display all the headers for diagnostic purposes.  If we
+        # figure out something better to do, it should go away entirely.
+        #
+        # Problem #1:  suppose a msg is multipart/alternative, with
+        # text/plain and text/html sections.  The latter MIME decorations
+        # are plain missing in what _GetMessageText() returns.  If we leave
+        # the multipart/alternative in the headers anyway, the email
+        # package's "lax parsing" won't complain about not finding any
+        # sections, but since the type *is* multipart/alternative then
+        # anyway, the tokenizer finds no text/* parts at all to tokenize.
+        # As a result, only the headers get tokenized.  By stripping
+        # Content-Type from the headers (if present), the email pkg
+        # considers the body to be text/plain (the default), and so it
+        # does get tokenized.
+        #
+        # Problem #2:  Outlook decodes quoted-printable and base64 on its
+        # own, but leaves any Content-Transfer-Encoding line in the headers.
+        # This can cause the email pkg to try to decode the text again,
+        # with unpleasant (but rarely fatal) results.  If we strip that
+        # header too, no problem -- although the fact that a msg was
+        # encoded in base64 is usually a good spam clue, and we miss that.
+        #
+        # Short course:  we either have to synthesize non-insane MIME
+        # structure, or eliminate all evidence of original MIME structure.
+        # We used to do the latter - but now that we must give valid
+        # multipart messages which include attached images, we are forced
+        # to try and do the former (but actually the 2 options are not
+        # mutually exclusive - first we eliminate all evidence of original
+        # MIME structure, before allowing the email package to synthesize
+        # non-insane MIME structure.
+
+        # We still jump through hoops though - if we have no interesting
+        # attachments we attempt to return as close as possible as what
+        # we always returned in the past - a "single-part" message with the
+        # text and HTML as a simple text body.
+        header_text, body, html = self._GetMessageTextParts()
+
+        try: # catch all exceptions!
+            # Try and decide early if we want multipart or not.
+            # We originally just looked at the content-type - but Outlook
+            # is unreliable WRT that header!  Also, consider a message multipart message
+            # with only text and html sections and no additional attachments.
+            # Outlook will generally have copied the HTML and Text sections
+            # into the relevant properties and they will *not* appear as
+            # attachments. We should return the 'single' message here to keep
+            # as close to possible to what we used to return.  We can change
+            # this policy in the future - but we would probably need to insist
+            # on a full re-train as the training tokens will have changed for
+            # many messages.
+            attachments = self._GetAttachmentsToInclude()
+            new_content_type = None
+            if attachments:
+                _class = MIMEMultipart
+                payload = []
+                if body:
+                    payload.append(MIMEText(body))
+                if html:
+                    payload.append(MIMEText(html, 'html'))
+                payload += attachments
+                new_content_type = "multipart/mixed"
+            else:
+                # Single message part with both text and HTML.
+                _class = Message
+                payload = body + '\n' + html
+
+            try:
+                root_msg = HeaderParser(_class=_class).parsestr(header_text)
+            except email.Errors.HeaderParseError:
+                raise # sob
+                # ack - it is about here we need to do what the old code did
+                # below:  But - the fact the code below is dealing only
+                # with content-type (and the fact we handle that above) makes
+                # it less obvious....
+
+                ## But even this doesn't get *everything*.  We can still see:
+                ##  "multipart message with no defined boundary" or the
+                ## HeaderParseError above.  Time to get brutal - hack out
+                ## the Content-Type header, so we see it as plain text.
+                #if msg is None:
+                #    butcher_pos = text.lower().find("\ncontent-type: ")
+                #    if butcher_pos < 0:
+                #        # This error just just gunna get caught below anyway
+                #        raise RuntimeError(
+                #            "email package croaked with a MIME related error, but "
+                #            "there appears to be no 'Content-Type' header")
+                #    # Put it back together, skipping the original "\n" but
+                #    # leaving the header leaving "\nSpamBayes-Content-Type: "
+                #    butchered = text[:butcher_pos] + "\nSpamBayes-" + \
+                #                text[butcher_pos+1:] + "\n\n"
+                #    msg = email.message_from_string(butchered)
+    
+            # patch up mime stuff - these headers will confuse the email
+            # package as it walks the attachments.
+            if strip_mime_headers:
+                for h, new_val in (('content-type', new_content_type),
+                                   ('content-transfer-encoding', None)):
+                    try:
+                        root_msg['X-SpamBayes-Original-' + h] = root_msg[h]
+                        del root_msg[h]
+                    except KeyError:
+                        pass
+                    if new_val is not None:
+                        root_msg[h] = new_val
+
+            root_msg.set_payload(payload)
+
+            # We used to call email.message_from_string(text) and catch:
+            # email.Errors.BoundaryError: should no longer happen - we no longer
+            # ask the email package to parse anything beyond headers.
+            # email.Errors.HeaderParseError: caught above
+        except:
+            text = '\r\n'.join([header_text, body, html])
+            print "FAILED to create email.message from: ", `text`
+            raise
+
+        return root_msg
+
+    # XXX - this is the OLD version of GetEmailPackageObject() - it
+    # temporarily remains as a testing aid, to ensure that the different
+    # mime structure we now generate has no negative affects.
+    # Use 'sandbox/export.py -o' to export to the testdata directory
+    # in the old format, then run the cross-validation tests.
+    def OldGetEmailPackageObject(self, strip_mime_headers=True):
         # Return an email.Message object.
         #
         # strip_mime_headers is a hack, and should be left True unless you're
@@ -1052,7 +1323,8 @@ class MAPIMsgStoreMsg:
                 del msg['content-transfer-encoding']
 
         return msg
-
+    # end of OLD GetEmailPackageObject
+    
     def SetField(self, prop, val):
         # Future optimization note - from GetIDsFromNames doco
         # Name-to-identifier mapping is represented by an object's
@@ -1188,12 +1460,14 @@ class MAPIMsgStoreMsg:
         try:
             self.MoveTo(folder)
         except MsgStoreException, details:
-            ReportMAPIError(manager, "Moving a message", details.mapi_exception)
+            ReportMAPIError(manager, _("Moving a message"),
+                            details.mapi_exception)
     def CopyToReportingError(self, manager, folder):
         try:
             self.MoveTo(folder)
         except MsgStoreException, details:
-            ReportMAPIError(manager, "Copying a message", details.mapi_exception)
+            ReportMAPIError(manager, _("Copying a message"),
+                            details.mapi_exception)
 
     def GetFolder(self):
         # return a folder object with the parent, or None
@@ -1205,6 +1479,9 @@ class MAPIMsgStoreMsg:
         self._EnsureObject()
         try:
             folder = self.GetFolder()
+            # Also save this information in our messageinfo database, which
+            # means that restoring should work even with IMAP.
+            self.original_folder = folder.id[0], folder.id[1]
             props = ( (mapi.PS_PUBLIC_STRINGS, "SpamBayesOriginalFolderStoreID"),
                       (mapi.PS_PUBLIC_STRINGS, "SpamBayesOriginalFolderID")
                       )
@@ -1235,11 +1512,13 @@ class MAPIMsgStoreMsg:
             help_test_suite("MAPIMsgStoreMsg.GetRememberedFolder")
             return self.msgstore.GetFolder(folder_id)
         except:
+            # Try to get it from the message info database, if possible
+            if self.original_folder:
+                return self.msgstore.GetFolder(self.original_folder)
             print "Error locating origin of message", self
             return None
 
 def test():
-    from win32com.client import Dispatch
     outlook = Dispatch("Outlook.Application")
     inbox = outlook.Session.GetDefaultFolder(constants.olFolderInbox)
     folder_id = inbox.Parent.StoreID, inbox.EntryID

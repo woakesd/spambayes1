@@ -10,15 +10,10 @@ import email.Utils
 import email.Errors
 import re
 import math
-import time
 import os
 import binascii
 import urlparse
 import urllib
-try:
-    from sets import Set
-except ImportError:
-    from compatsets import Set
 
 from spambayes import classifier
 from spambayes.Options import options
@@ -26,12 +21,19 @@ from spambayes.Options import options
 from spambayes.mboxutils import get_message
 
 try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
+    from spambayes import dnscache
+    cache = dnscache.cache(cachefile=options["Tokenizer", "lookup_ip_cache"])
+    cache.printStatsAtEnd = False
+except (IOError, ImportError):
+    class cache:
+        @staticmethod
+        def lookup(*args):
+            return []
+else:
+    import atexit
+    atexit.register(cache.close)
 
-
+ 
 # Patch encodings.aliases to recognize 'ansi_x3_4_1968'
 from encodings.aliases import aliases # The aliases dictionary
 if not aliases.has_key('ansi_x3_4_1968'):
@@ -608,14 +610,22 @@ del aliases # Not needed any more
 # words in the msg, without regard to how many times a given word appears.
 def textparts(msg):
     """Return a set of all msg parts with content maintype 'text'."""
-    return Set(filter(lambda part: part.get_content_maintype() == 'text',
+    return set(filter(lambda part: part.get_content_maintype() == 'text',
                       msg.walk()))
 
 def octetparts(msg):
     """Return a set of all msg parts with type 'application/octet-stream'."""
-    return Set(filter(lambda part:
-                      part.get_type() == 'application/octet-stream',
+    return set(filter(lambda part:
+                      part.get_content_type() == 'application/octet-stream',
                       msg.walk()))
+
+def imageparts(msg):
+    """Return a list of all msg parts with type 'image/*'."""
+    # Don't want a set here because we want to be able to process them in
+    # order.
+    return filter(lambda part:
+                  part.get_content_type().startswith('image/'),
+                  msg.walk())
 
 has_highbit_char = re.compile(r"[\x80-\xff]").search
 
@@ -655,6 +665,8 @@ received_host_re = re.compile(r'from ([a-z0-9._-]+[a-z])[)\s]')
 #   Received: from unknown (66.218.66.218)
 #       by m19.grp.scd.yahoo.com with QMQP; 19 Dec 2003 04:06:53 -0000
 received_ip_re = re.compile(r'[[(]((\d{1,3}\.?){4})[])]')
+
+received_nntp_ip_re = re.compile(r'((\d{1,3}\.?){4})')
 
 message_id_re = re.compile(r'\s*<[^@]+@([^>]+)>\s*')
 
@@ -820,9 +832,15 @@ def crack_content_xyz(msg):
     if x is not None:
         yield 'content-type/type:' + x.lower()
 
-    for x in msg.get_charsets(None):
-        if x is not None:
-            yield 'charset:' + x.lower()
+    try:
+        for x in msg.get_charsets(None):
+            if x is not None:
+                yield 'charset:' + x.lower()
+    except UnicodeEncodeError:
+        # Bad messages can cause an exception here.
+        # See [ 1175439 ] UnicodeEncodeError raised for bogus Content-Type
+        #                 header
+        yield 'charset:invalid_unicode'
 
     x = msg.get('content-disposition')
     if x is not None:
@@ -1052,6 +1070,14 @@ class URLStripper(Stripper):
             url = urllib.unquote(url)
             scheme, netloc, path, params, query, frag = urlparse.urlparse(url)
 
+            if options["Tokenizer", "x-lookup_ip"]:
+                ips = cache.lookup(netloc)
+                if not ips:
+                    pushclue("url-ip:lookup error")
+                else:
+                    for clue in gen_dotted_quad_clues("url-ip", ips):
+                        pushclue(clue)
+
             # one common technique in bogus "please (re-)authorize yourself"
             # scams is to make it appear as if you're visiting a valid
             # payment-oriented site like PayPal, CitiBank or eBay, when you
@@ -1210,6 +1236,14 @@ class Tokenizer:
                     "%d %b %Y %H:%M %Z")
 
     def __init__(self):
+        self.setup()
+
+    def setup(self):
+        """Get the tokenizer ready to use; this should be called after
+        all options have been set."""
+        # We put this here, rather than in __init__, so that this can be
+        # done after we set options at runtime (since the tokenizer
+        # instance is generally created when this module is imported).
         if options["Tokenizer", "basic_header_tokenize"]:
             self.basic_skip = [re.compile(s)
                                for s in options["Tokenizer",
@@ -1314,11 +1348,14 @@ class Tokenizer:
         x = msg.get('subject', '')
         try:
             subjcharsetlist = email.Header.decode_header(x)
-        except (binascii.Error, email.Errors.HeaderParseError):
+        except (binascii.Error, email.Errors.HeaderParseError, ValueError):
             subjcharsetlist = [(x, 'invalid')]
         for x, subjcharset in subjcharsetlist:
             if subjcharset is not None:
                 yield 'subjectcharset:' + subjcharset
+            # this is a workaround for a bug in the csv module in Python
+            # <= 2.3.4 and 2.4.0 (fixed in 2.5)
+            x = x.replace('\r', ' ')
             for w in subject_word_re.findall(x):
                 for t in tokenize_word(w):
                     yield 'subject:' + t
@@ -1346,7 +1383,8 @@ class Tokenizer:
                 if name:
                     try:
                         subjcharsetlist = email.Header.decode_header(name)
-                    except (binascii.Error, email.Errors.HeaderParseError):
+                    except (binascii.Error, email.Errors.HeaderParseError,
+                            ValueError):
                         subjcharsetlist = [(name, 'invalid')]
                     for name, charset in subjcharsetlist:
                         yield "%s:name:%s" % (field, name.lower())
@@ -1468,31 +1506,12 @@ class Tokenizer:
                         for tok in breakdown(m.group(1)):
                             yield 'received:' + tok
 
-        # Date:
-        if options["Tokenizer", "x-generate_time_buckets"]:
-            for header in msg.get_all("date", ()):
-                mat = self.date_hms_re.search(header)
-                # return the time in Date: headers arranged in
-                # 10-minute buckets
-                if mat is not None:
-                    h = int(mat.group('hour'))
-                    bucket = int(mat.group('minute')) // 10
-                    yield 'time:%02d:%d' % (h, bucket)
-
-        if options["Tokenizer", "x-extract_dow"]:
-            for header in msg.get_all("date", ()):
-                # extract the day of the week
-                for fmt in self.date_formats:
-                    try:
-                        timetuple = time.strptime(header, fmt)
-                    except ValueError:
-                        pass
-                    else:
-                        yield 'dow:%d' % timetuple[6]
-                        break
-                else:
-                    # if nothing matches, declare the Date: header invalid
-                    yield 'dow:invalid'
+        # Lots of spam gets posted on Usenet.  If it is then gatewayed to a
+        # mailing list perhaps the NNTP-Posting-Host info will yield some
+        # useful clues.
+        if options["Tokenizer", "x-mine_nntp_headers"]:
+            for clue in mine_nntp(msg):
+                yield clue
 
         # Message-Id:  This seems to be a small win and should not
         # adversely affect a mixed source corpus so it's always enabled.
@@ -1529,8 +1548,35 @@ class Tokenizer:
                 if not k.lower() in options["Tokenizer", "safe_headers"]:
                     yield "noheader:" + k
 
-    def tokenize_body(self, msg, maxword=options["Tokenizer",
-                                                 "skip_max_word_size"]):
+    def tokenize_text(self, text, maxword=options["Tokenizer",
+                                                  "skip_max_word_size"]):
+        """Tokenize everything in the chunk of text we were handed."""
+        short_runs = set()
+        short_count = 0
+        for w in text.split():
+            n = len(w)
+            if n < 3:
+                # count how many short words we see in a row - meant to
+                # latch onto crap like this:
+                # X j A m N j A d X h
+                # M k E z R d I p D u I m A c
+                # C o I d A t L j I v S j
+                short_count += 1
+            else:
+                if short_count:
+                    short_runs.add(short_count)
+                    short_count = 0
+                # Make sure this range matches in tokenize_word().
+                if 3 <= n <= maxword:
+                    yield w
+
+                elif n >= 3:
+                    for t in tokenize_word(w):
+                        yield t
+        if short_runs and options["Tokenizer", "x-short_runs"]:
+            yield "short:%d" % int(log2(max(short_runs)))
+
+    def tokenize_body(self, msg):
         """Generate a stream of tokens from an email Message.
 
         If options['Tokenizer', 'check_octets'] is True, the first few
@@ -1554,6 +1600,35 @@ class Tokenizer:
 
                 yield "octet:%s" % text[:options["Tokenizer",
                                                  "octet_prefix_size"]]
+
+        parts = imageparts(msg)
+        if options["Tokenizer", "image_size"]:
+            # Find image/* parts of the body, calculating the log(size) of
+            # each image.
+
+            total_len = 0
+            for part in parts:
+                try:
+                    text = part.get_payload(decode=True)
+                except:
+                    yield "control: couldn't decode image"
+                    text = part.get_payload(decode=False)
+
+                total_len += len(text or "")
+                if text is None:
+                    yield "control: image payload is None"
+
+            if total_len:
+                yield "image-size:2**%d" % round(log2(total_len))
+
+        if options["Tokenizer", "crack_images"]:
+            engine_name = options["Tokenizer", 'ocr_engine']
+            from spambayes.ImageStripper import crack_images
+            text, tokens = crack_images(engine_name, parts)
+            for t in tokens:
+                yield t
+            for t in self.tokenize_text(text):
+                yield t
 
         # Find, decode (base64, qp), and tokenize textual parts of the body.
         for part in textparts(msg):
@@ -1607,15 +1682,55 @@ class Tokenizer:
             # they can't be used to hide words effectively).
             text = html_re.sub('', text)
 
-            # Tokenize everything in the body.
-            for w in text.split():
-                n = len(w)
-                # Make sure this range matches in tokenize_word().
-                if 3 <= n <= maxword:
-                    yield w
+            for t in self.tokenize_text(text):
+                yield t
 
-                elif n >= 3:
-                    for t in tokenize_word(w):
-                        yield t
+# Mine NNTP-Posting-Host headers.  This is part of an effort to put some
+# SpamBayes smarts into the Mailman gate_news program.  On mail.python.org
+# messages arriving via Usenet bypass all the barriers the Python
+# postmasters have erected against mail-borne spam, including not running
+# them through SpamBayes.
 
-tokenize = Tokenizer().tokenize
+# Anecdotal evidence on comp.lang.python suggests that certain posting hosts
+# (I won't name any names, but the one mentioned heavily starts with a
+# 'g'and has two 'o's in the middle) are more prone to let spam leak into
+# Usenet.  My initial testing (also hardly more than anecdotal) suggests
+# there are useful clues awaiting extractiotn from this header.
+def mine_nntp(msg):
+    nntp_headers = msg.get_all("nntp-posting-host", ())
+    for address in nntp_headers:
+        if received_nntp_ip_re.match(address):
+            for clue in gen_dotted_quad_clues("nntp-host", [address]):
+                yield clue
+            names = cache.lookup(address)
+            if names:
+                yield 'nntp-host-ip:has-reverse'
+                yield 'nntp-host-name:%s' % names[0]
+                yield ('nntp-host-domain:%s' %
+                       '.'.join(names[0].split('.')[-2:]))
+        else:
+            # assume it's a hostname
+            name = address
+            yield 'nntp-host-name:%s' % name
+            yield ('nntp-host-domain:%s' %
+                   '.'.join(name.split('.')[-2:]))
+            addresses = cache.lookup(name)
+            if addresses:
+                for clue in gen_dotted_quad_clues("nntp-host-ip", addresses):
+                    yield clue
+                if cache.lookup(addresses[0], qType="PTR") == name:
+                    yield 'nntp-host-ip:has-reverse'
+
+def gen_dotted_quad_clues(pfx, ips):
+    for ip in ips:
+        yield "%s:%s/32" % (pfx, ip)
+        dottedQuadList = ip.split(".")
+        yield "%s:%s/8" % (pfx, dottedQuadList[0])
+        yield "%s:%s.%s/16" % (pfx, dottedQuadList[0],
+                               dottedQuadList[1])
+        yield "%s:%s.%s.%s/24" % (pfx, dottedQuadList[0],
+                                  dottedQuadList[1],
+                                  dottedQuadList[2])
+
+global_tokenizer = Tokenizer()
+tokenize = global_tokenizer.tokenize

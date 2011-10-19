@@ -16,7 +16,7 @@ To do:
  o Suggestions?
 """
 
-# This module is part of the spambayes project, which is Copyright 2002-3
+# This module is part of the spambayes project, which is Copyright 2002-2007
 # The Python Software Foundation and is covered by the Python Software
 # Foundation license.
 
@@ -25,12 +25,6 @@ from __future__ import generators
 __author__ = "Tony Meyer <ta-meyer@ihug.co.nz>"
 __credits__ = "All the Spambayes folk."
 
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-
 import os
 import sys
 import cgi
@@ -38,8 +32,8 @@ import glob
 import random
 import StringIO
 
-import ProxyUI
-import oe_mailbox
+from spambayes import ProxyUI
+from spambayes import oe_mailbox
 from spambayes import msgs
 from spambayes import TestDriver
 from spambayes import OptionsClass
@@ -60,9 +54,9 @@ testtools_ini_map = (
 
 # Dynamically add any current experimental/deprecated options.
 for opt in options.options(True):
-    sect, opt = opt[1:].split(']', 1)
+    _sect, _opt = opt[1:].split(']', 1)
     if opt[:2].lower() == "x-":
-        testtools_ini_map += ((sect, opt),)
+        testtools_ini_map += ((_sect, _opt),)
 
 class TestToolsUserInterface(ProxyUI.ProxyUserInterface):
     """Serves the HTML user interface for the test tools."""
@@ -93,8 +87,8 @@ class TestToolsUserInterface(ProxyUI.ProxyUserInterface):
                               ('TestToolsUI', 'source'),
                               ('TestToolsUI', 'n'),)
 
-        option_choice = self._buildConfigPageBody(\
-            configTable, testtools_ini_map)
+        option_choice = self._buildConfigPageBody(configTable,
+                                                  testtools_ini_map)
         option_choice.action_page.action = "cvresults"
         option_choice.introduction = "Select the options for your test " \
                                      "(these will be run against the " \
@@ -529,15 +523,15 @@ class CacheStream(msgs.MsgStream):
 
             set_num, nsets = portion.split('/')
 
-            all = os.listdir(directory)
-            random.seed(hash(max(all)) ^ msgs.SEED)
-            random.shuffle(all)
+            files = os.listdir(directory)
+            random.seed(hash(max(files)) ^ msgs.SEED)
+            random.shuffle(files)
 
-            set_size = len(all) // int(nsets)
+            set_size = len(files) // int(nsets)
             set_num = int(set_num)
-            set = all[set_num*set_size:((set_num+1)*set_size)-1]
-            set.sort()
-            for fname in set:
+            fileset = files[set_num*set_size:((set_num+1)*set_size)-1]
+            fileset.sort()
+            for fname in fileset:
                 yield msgs.Msg(directory, fname)
 
 class HamCacheStream(CacheStream):

@@ -21,29 +21,11 @@
 # # Display stats against all runs.
 # alldone()
 
-try:
-    from sets import Set
-except ImportError:
-    from spambayes.compatsets import Set
-
-import cPickle as pickle
-
-try:
-    from heapq import heapreplace
-except ImportError:
-    from spambayes.compatheapq import heapreplace
-
 from spambayes.Options import options
 from spambayes import Tester
 from spambayes import classifier
 from spambayes.Histogram import Hist
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-
+from spambayes.safepickle import pickle_write
 
 def printhist(tag, ham, spam, nbuckets=options["TestDriver", "nbuckets"]):
     print
@@ -127,7 +109,7 @@ def printhist(tag, ham, spam, nbuckets=options["TestDriver", "nbuckets"]):
               num_fp*1e2 / ham.n, num_fn*1e2 / spam.n,
               (num_unh + num_uns)*1e2 / (ham.n + spam.n))
 
-    return float(bests[0][0])/n,float(bests[0][1])/n
+    return float(bests[0][0])/n, float(bests[0][1])/n
 
 def printmsg(msg, prob, clues):
     print msg.tag
@@ -144,15 +126,15 @@ def printmsg(msg, prob, clues):
 class Driver:
 
     def __init__(self):
-        self.falsepos = Set()
-        self.falseneg = Set()
-        self.unsure = Set()
+        self.falsepos = set()
+        self.falseneg = set()
+        self.unsure = set()
         self.global_ham_hist = Hist()
         self.global_spam_hist = Hist()
         self.ntimes_finishtest_called = 0
         self.new_classifier()
         from spambayes import CostCounter
-        self.cc=CostCounter.default()
+        self.cc = CostCounter.default()
 
     def new_classifier(self):
         """Create and use a new, virgin classifier."""
@@ -193,15 +175,13 @@ class Driver:
             fname = "%s%d.pik" % (options["TestDriver", "pickle_basename"],
                                   self.ntimes_finishtest_called)
             print "    saving pickle to", fname
-            fp = file(fname, 'wb')
-            pickle.dump(self.classifier, fp, 1)
-            fp.close()
+            pickle_write(fname, self.classifier, 1)
 
     def alldone(self):
         if options["TestDriver", "show_histograms"]:
-            besthamcut,bestspamcut = printhist("all runs:",
-                                               self.global_ham_hist,
-                                               self.global_spam_hist)
+            besthamcut, bestspamcut = printhist("all runs:",
+                                                self.global_ham_hist,
+                                                self.global_spam_hist)
         else:
             besthamcut = options["Categorization", "ham_cutoff"]
             bestspamcut = options["Categorization", "spam_cutoff"]
@@ -232,10 +212,8 @@ class Driver:
                          ('spam', self.global_spam_hist)):
                 fname = "%s_%shist.pik" % (options["TestDriver",
                                                    "pickle_basename"], f)
-                print "    saving %s histogram pickle to %s" %(f, fname)
-                fp = file(fname, 'wb')
-                pickle.dump(h, fp, 1)
-                fp.close()
+                print "    saving %s histogram pickle to %s" % (f, fname)
+                pickle_write(fname, h, 1)
 
     def test(self, ham, spam):
         c = self.classifier
@@ -279,7 +257,7 @@ class Driver:
                (t.nham_unsure + t.nspam_unsure) *
                options["TestDriver", "best_cutoff_unsure_weight"])
 
-        newfpos = Set(t.false_positives()) - self.falsepos
+        newfpos = set(t.false_positives()) - self.falsepos
         self.falsepos |= newfpos
         print "-> <stat> %d new false positives" % len(newfpos)
         if newfpos:
@@ -291,7 +269,7 @@ class Driver:
             prob, clues = c.spamprob(e, True)
             printmsg(e, prob, clues)
 
-        newfneg = Set(t.false_negatives()) - self.falseneg
+        newfneg = set(t.false_negatives()) - self.falseneg
         self.falseneg |= newfneg
         print "-> <stat> %d new false negatives" % len(newfneg)
         if newfneg:
@@ -303,7 +281,7 @@ class Driver:
             prob, clues = c.spamprob(e, True)
             printmsg(e, prob, clues)
 
-        newunsure = Set(t.unsures()) - self.unsure
+        newunsure = set(t.unsures()) - self.unsure
         self.unsure |= newunsure
         print "-> <stat> %d new unsure" % len(newunsure)
         if newunsure:

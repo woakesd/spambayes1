@@ -195,13 +195,6 @@ __author__ = "Richie Hindle <richie@entrian.com>"
 
 # Entrian.Coverage: Pragma Stop
 import sys, re, string
-try:
-    True, False, bool
-except NameError:
-    True = 1
-    False = 0
-    def bool(x):
-        return not not x
 # Entrian.Coverage: Pragma Start
 
 class _Fail:
@@ -771,6 +764,65 @@ class Meld:
             del node.attributes[name]
         else:
             raise AttributeError, "No element or attribute named %r" % name
+
+    def __getitem__(self, name):
+        """`object[<name>]`, if this Meld contains an element with an `id`
+        attribute of `name`, returns a Meld representing that element.
+
+        If no such element exists, a KeyError is raised.
+
+        >>> p = Meld('<p style="one">Hello <b id="who">World</b></p>')
+        >>> print p["who"]
+        <b id="who">World</b>
+        >>> print p["who"]_content
+        World
+        """
+
+        node = self._findByID(self._tree, name)
+        if node:
+            return Meld(node, self._readonly)
+        raise KeyError, "No element named %r" % name
+
+    def __setitem__(self, name, value):
+        """`object[<name>] = value` sets the XML content of the element with an
+        `id` of `name`.
+        
+        If no such element exists, a KeyError is raised because there is no
+        info about the type of element to add.
+
+        >>> p = Meld('<p>Hello <b id="who">World</b></p>')
+        >>> p["who"] = "Richie"
+        >>> p["who"].id = "newwho"
+        >>> print p
+        <p>Hello <b id="newwho">Richie</b></p>
+        """
+
+        if self._readonly:
+            raise ReadOnlyError, READ_ONLY_MESSAGE
+        node = self._findByID(self._tree, name)
+        if hasattr(value, '_tree') and value._tree is node:
+            return   # x["y"] = x.y
+        if node:
+            self._replaceNodeContent(node, value)
+            return
+        raise KeyError, "No element named %r" % name
+
+    def __delitem__(self, name):
+        """Deletes the named element from the `Meld`:
+
+        >>> p = Meld('<p style="one">Hello <b id="who">World</b></p>')
+        >>> del p["who"]
+        >>> print p
+        <p style="one">Hello </p>
+        """
+
+        if self._readonly:
+            raise ReadOnlyError, READ_ONLY_MESSAGE
+        node = self._findByID(self._tree, name)
+        if node:
+            node.parent.children.remove(node)
+            return
+        raise KeyError, "No element named %r" % name
 
     def __iadd__(self, other):
         """`object1 += object2` appends a string or a clone of a Meld to

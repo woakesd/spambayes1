@@ -1,5 +1,2 @@
 gnus_fix.patch
 paths_fix.patch
-future_import.patch
-CRAM_MD5_authentication.patch
-handle_ValueError_in_decode_headers.patch

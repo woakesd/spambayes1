@@ -16,20 +16,22 @@ def open_db3hash(*args):
 def open_dbhash(*args):
     """Open a bsddb hash.  Don't use this on Windows, unless Python 2.3 or
     greater is used, in which case bsddb3 is actually named bsddb."""
-    import bsddb
+    from spambayes.port import bsddb
     return bsddb.hashopen(*args)
 
 def open_gdbm(*args):
     """Open a gdbm database."""
-    import gdbm
-    return gdbm.open(*args)
+    from spambayes.port import gdbm
+    if gdbm is not None:
+        return gdbm.open(*args)
+    raise ImportError("gdbm not available")
 
 def open_best(*args):
     if sys.platform == "win32":
         # Note that Python 2.3 and later ship with the new bsddb interface
         # as the default bsddb module - so 2.3 can use the old name safely.
         funcs = [open_db3hash, open_gdbm]
-        if sys.version_info >= (2,3):
+        if sys.version_info >= (2, 3):
             funcs.insert(0, open_dbhash)
     else:
         funcs = [open_db3hash, open_dbhash, open_gdbm]
@@ -48,16 +50,19 @@ open_funcs = {
     }
 
 def open(db_name, mode):
-    if os.path.exists(db_name):
+    if os.path.exists(db_name) and \
+       options.default("globals", "dbm_type") != \
+       options["globals", "dbm_type"]:
         # let the file tell us what db to use
         dbm_type = whichdb.whichdb(db_name)
         # if we are using Windows and Python < 2.3, then we need to use
         # db3hash, not dbhash.
-        if sys.platform == "win32" and sys.version_info < (2,3) and \
-           dbm_type == "dbhash":
+        if (sys.platform == "win32" and
+            sys.version_info < (2, 3) and
+            dbm_type == "dbhash"):
             dbm_type = "db3hash"
     else:
-        # fresh file - open with what the user specified
+        # fresh file or overridden - open with what the user specified
         dbm_type = options["globals", "dbm_type"].lower()
     f = open_funcs.get(dbm_type)
     if f is None:

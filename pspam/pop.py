@@ -27,7 +27,6 @@ POP3 is documented in RFC 1939.
 """
 
 import SocketServer
-import asyncore
 try:
     import cStringIO as StringIO
 except ImportError:
@@ -37,23 +36,13 @@ import email
 import re
 import socket
 import sys
-import threading
 import time
 
-import ZODB
-from ZEO.ClientStorage import ClientStorage
 import zLOG
 
 from spambayes.tokenizer import tokenize
 import pspam.database
 from spambayes.Options import options
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-
 
 HEADER = "X-Spambayes: %5.3f\r\n"
 HEADER_SIZE = len(HEADER % 0.0)

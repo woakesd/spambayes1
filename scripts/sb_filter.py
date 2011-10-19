@@ -19,6 +19,8 @@
 Options can one or more of:
     -h
         show usage and exit
+    -v
+        show version and exit
     -x
         show some usage examples and exit
     -d DBFILE
@@ -30,21 +32,22 @@ Options can one or more of:
 *   -f
         filter (default if no processing options are given)
 *   -g
-        [EXPERIMENTAL] (re)train as a good (ham) message
+        (re)train as a good (ham) message
 *   -s
-        [EXPERIMENTAL] (re)train as a bad (spam) message
+        (re)train as a bad (spam) message
 *   -t
-        [EXPERIMENTAL] filter and train based on the result -- you must
+        filter and train based on the result -- you must
         make sure to untrain all mistakes later.  Not recommended.
 *   -G
-        [EXPERIMENTAL] untrain ham (only use if you've already trained
-        this message)
+        untrain ham (only use if you've already trained this message)
 *   -S
-        [EXPERIMENTAL] untrain spam (only use if you've already trained
-        this message)
+        untrain spam (only use if you've already trained this message)
 
     -o section:option:value
         set [section, option] in the options database to value
+
+    -P
+        Run under control of the Python profiler, if it is available
 
 All options marked with '*' operate on stdin, and write the resultant
 message to stdout.
@@ -78,13 +81,7 @@ import os
 import sys
 import getopt
 from spambayes import hammie, Options, mboxutils, storage
-from spambayes.Version import get_version_string
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
+from spambayes.Version import get_current_version
 
 # See Options.py for explanations of these properties
 program = sys.argv[0]
@@ -127,8 +124,8 @@ def examples():
 def usage(code, msg=''):
     """Print usage message and sys.exit(code)."""
     # Include version info in usage
-    print >> sys.stderr, get_version_string("sb_filter")
-    print >> sys.stderr, "    with engine %s" % get_version_string()
+    v = get_current_version()
+    print >> sys.stderr, v.get_long_version("SpamBayes Command Line Filter")
     print >> sys.stderr
     
     if msg:
@@ -136,6 +133,11 @@ def usage(code, msg=''):
         print >> sys.stderr
     print >> sys.stderr, __doc__ % globals()
     sys.exit(code)
+
+def version():
+    v = get_current_version()
+    print >> sys.stderr, v.get_long_version("SpamBayes Command Line Filter")
+    sys.exit(0)
 
 class HammieFilter(object):
     def __init__(self):
@@ -152,13 +154,14 @@ class HammieFilter(object):
         options.merge_files(['/etc/hammierc',
                             os.path.expanduser('~/.hammierc')])
         self.dbname, self.usedb = storage.database_type([])
-        self.h = None
+        self.mode = self.h = None
 
     def open(self, mode):
         if self.h is None or self.mode != mode:
             if self.h is not None:
                 if self.mode != 'r':
                     self.h.store()
+                self.h.close()
             self.mode = mode
             self.h = hammie.open(self.dbname, self.usedb, self.mode)
 
@@ -166,6 +169,7 @@ class HammieFilter(object):
         if self.h is not None:
             if self.mode != 'r':
                 self.h.store()
+            self.h.close()
         self.h = None
 
     __del__ = close
@@ -173,10 +177,12 @@ class HammieFilter(object):
     def newdb(self):
         self.open('n')
         self.close()
-        print >> sys.stderr, "Created new database in", self.dbname
 
     def filter(self, msg):
-        self.open('r')
+        if Options.options["Hammie", "train_on_filter"]:
+            self.open('c')
+        else:
+            self.open('r')
         return self.h.filter(msg)
 
     def filter_train(self, msg):
@@ -185,12 +191,12 @@ class HammieFilter(object):
 
     def train_ham(self, msg):
         self.open('c')
-        self.h.train_ham(msg, True)
+        self.h.train_ham(msg, Options.options["Headers", "include_trained"])
         self.h.store()
 
     def train_spam(self, msg):
         self.open('c')
-        self.h.train_spam(msg, True)
+        self.h.train_spam(msg, Options.options["Headers", "include_trained"])
         self.h.store()
 
     def untrain_ham(self, msg):
@@ -203,15 +209,18 @@ class HammieFilter(object):
         self.h.untrain_spam(msg)
         self.h.store()
 
-def main():
+def main(profiling=False):
     h = HammieFilter()
     actions = []
-    opts, args = getopt.getopt(sys.argv[1:], 'hxd:p:nfgstGSo:',
-                               ['help', 'examples', 'option='])
+    opts, args = getopt.getopt(sys.argv[1:], 'hvxd:p:nfgstGSo:P',
+                               ['help', 'version', 'examples', 'option='])
     create_newdb = False
+    do_profile = False
     for opt, arg in opts:
         if opt in ('-h', '--help'):
             usage(0)
+        elif opt in ('-v', '--version'):
+            version()
         elif opt in ('-x', '--examples'):
             examples()
         elif opt in ('-o', '--option'):
@@ -228,13 +237,24 @@ def main():
             actions.append(h.untrain_ham)
         elif opt == '-S':
             actions.append(h.untrain_spam)
+        elif opt == '-P':
+            do_profile = True
+            if not profiling:
+                try:
+                    import cProfile
+                except ImportError:
+                    pass
+                else:
+                    return cProfile.run("main(True)")
         elif opt == "-n":
             create_newdb = True
     h.dbname, h.usedb = storage.database_type(opts)
 
-    if create_newdb:
+    if create_newdb or not os.path.exists(h.dbname):
         h.newdb()
-        sys.exit(0)
+        print >> sys.stderr, "Created new database in", h.dbname
+        if create_newdb:
+            sys.exit(0)
 
     if actions == []:
         actions = [h.filter]

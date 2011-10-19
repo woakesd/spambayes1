@@ -1,17 +1,11 @@
 #! /usr/bin/env python
 
+import math
 
 from spambayes import mboxutils
 from spambayes import storage
 from spambayes.Options import options
 from spambayes.tokenizer import tokenize
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-
 
 class Hammie:
     """A spambayes mail filter.
@@ -21,8 +15,9 @@ class Hammie:
 
     """
 
-    def __init__(self, bayes):
+    def __init__(self, bayes, mode):
         self.bayes = bayes
+        self.mode = mode
 
     def _scoremsg(self, msg, evidence=False):
         """Score a Message.
@@ -61,9 +56,9 @@ class Hammie:
 
         return self._scoremsg(msg, evidence)
 
-    def filter(self, msg, header=None, spam_cutoff=None,
-               ham_cutoff=None, debugheader=None,
-               debug=None, train=None):
+    def score_and_filter(self, msg, header=None, spam_cutoff=None,
+                         ham_cutoff=None, debugheader=None,
+                         debug=None, train=None):
         """Score (judge) a message and add a disposition header.
 
         msg can be a string, a file object, or a Message object.
@@ -83,7 +78,7 @@ class Hammie:
 
         All defaults for optional parameters come from the Options file.
 
-        Returns the same message with a new disposition header.
+        Returns the score and same message with a new disposition header.
         """
 
         if header == None:
@@ -121,14 +116,13 @@ class Hammie:
         basic_disp = disp
         disp += "; %.*f" % (options["Headers", "header_score_digits"], prob)
         if options["Headers", "header_score_logarithm"]:
-            if prob<=0.005 and prob>0.0:
+            if prob <= 0.005 and prob > 0.0:
                 import math
-                x=-math.log10(prob)
-                disp += " (%d)"%x
-            if prob>=0.995 and prob<1.0:
-                import math
-                x=-math.log10(1.0-prob)
-                disp += " (%d)"%x
+                x = -math.log10(prob)
+                disp += " (%d)" % x
+            if prob >= 0.995 and prob < 1.0:
+                x = -math.log10(1.0-prob)
+                disp += " (%d)" % x
         del msg[header]
         msg.add_header(header, disp)
 
@@ -145,6 +139,14 @@ class Hammie:
             msg.add_header(debugheader, disp)
         result = mboxutils.as_string(msg, unixfrom=(msg.get_unixfrom()
                                                     is not None))
+        return prob, result
+
+    def filter(self, msg, header=None, spam_cutoff=None,
+               ham_cutoff=None, debugheader=None,
+               debug=None, train=None):
+        _prob, result = self.score_and_filter(
+            msg, header, spam_cutoff, ham_cutoff, debugheader,
+            debug, train)
         return result
 
     def train(self, msg, is_spam, add_header=False):
@@ -257,6 +259,9 @@ class Hammie:
 
         self.bayes.store()
 
+    def close(self):
+        if self.mode != 'r':
+            self.store()
 
 def open(filename, useDB="dbm", mode='r'):
     """Open a file, returning a Hammie instance.
@@ -264,11 +269,11 @@ def open(filename, useDB="dbm", mode='r'):
     mode is used as the flag to open DBDict objects.  'c' for read-write
     (create if needed), 'r' for read-only, 'w' for read-write.
     """
-    return Hammie(storage.open_storage(filename, useDB, mode))
+    return Hammie(storage.open_storage(filename, useDB, mode), mode)
 
 
 if __name__ == "__main__":
     # Everybody's used to running hammie.py.  Why mess with success?  ;)
-    import hammiebulk
+    from spambayes import hammiebulk
 
     hammiebulk.main()

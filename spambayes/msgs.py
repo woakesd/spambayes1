@@ -34,6 +34,12 @@ class Msg(object):
     def __str__(self):
         return self.guts
 
+    # We have defined __slots__, so need these to be able to be pickled.
+    def __getstate__(self):
+        return self.tag, self.guts
+    def __setstate__(self, s):
+        self.tag, self.guts = s
+
 # The iterator yields a stream of Msg objects, taken from a list of
 # directories.
 class MsgStream(object):

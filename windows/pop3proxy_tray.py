@@ -4,18 +4,12 @@
 POP3 proxy.
 """
 
-# This module is part of the spambayes project, which is Copyright 2002-3
+# This module is part of the spambayes project, which is Copyright 2002-2007
 # The Python Software Foundation and is covered by the Python Software
 # Foundation license.
 
 __author__ = "Tony Meyer <ta-meyer@ihug.co.nz>, Adam Walker"
 __credits__ = "Mark Hammond, all the Spambayes folk."
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
 
 # Heavily based on the win32gui_taskbar.py demo from Mark Hammond's
 # win32 extensions.
@@ -78,17 +72,14 @@ except win32api_error:
 # Work out our "application directory", which is
 # the directory of our main .py/.exe file we
 # are running from.
-try:
-    if hasattr(sys, "frozen"):
-        if sys.frozen == "dll":
-            # Don't think we will ever run as a .DLL, but...
-            this_filename = win32api.GetModuleFileName(sys.frozendllhandle)
-        else:
-            this_filename = os.path.abspath(sys.argv[0])
+if hasattr(sys, "frozen"):
+    if sys.frozen == "dll":
+        # Don't think we will ever run as a .DLL, but...
+        this_filename = win32api.GetModuleFileName(sys.frozendllhandle)
     else:
-        this_filename = os.path.abspath(__file__)
-except NameError: # no __file__
-    this_filename = os.path.abspath(sys.argv[0])
+        this_filename = os.path.abspath(sys.argv[0])
+else:
+    this_filename = os.path.abspath(__file__)
 
 this_dir = os.path.dirname(this_filename)
 if not hasattr(sys, "frozen"):
@@ -136,9 +127,16 @@ class MainWindow(object):
                                   1028 : ("Configure ...", self.OpenConfig),
                                   1029 : ("Check for latest version", self.CheckVersion),
                                   1030 : ("-", None),
+        # This could become a submenu, like the Outlook plug-in has, at
+        # some point, if necessary.  For the moment, the only help is a
+        # simple troubleshooting guide, so we'll just open that.
+                                  1031 : ("Help", self.GetHelp),
+                                  1032 : ("-", None),
                                   1099 : ("Exit SpamBayes", self.OnExit),
                                   }
+        msg_TaskbarRestart = RegisterWindowMessage("TaskbarCreated");
         message_map = {
+            msg_TaskbarRestart: self.OnTaskbarRestart,
             win32con.WM_DESTROY: self.OnDestroy,
             win32con.WM_COMMAND: self.OnCommand,
             WM_TASKBAR_NOTIFY : self.OnTaskbarNotify,
@@ -182,10 +180,7 @@ class MainWindow(object):
             self.hstoppedicon = LoadImage(hinst, stoppedIconPathName, win32con.IMAGE_ICON,
                                           16, 16, icon_flags)
 
-        flags = NIF_ICON | NIF_MESSAGE | NIF_TIP
-        nid = (self.hwnd, 0, flags, WM_TASKBAR_NOTIFY, self.hstartedicon,
-            "SpamBayes")
-        Shell_NotifyIcon(NIM_ADD, nid)
+        self._AddTaskbarIcon()
         self.started = IsServerRunningAnywhere()
         self.tip = None
         if self.use_service and not self.IsServiceAvailable():
@@ -198,6 +193,20 @@ class MainWindow(object):
         else:
             print "The server is already running externally - not starting " \
                   "a local server"
+
+    def _AddTaskbarIcon(self):
+        flags = NIF_ICON | NIF_MESSAGE | NIF_TIP
+        nid = (self.hwnd, 0, flags, WM_TASKBAR_NOTIFY, self.hstartedicon,
+            "SpamBayes")
+        try:
+            Shell_NotifyIcon(NIM_ADD, nid)
+        except win32api_error:
+            # Apparently can be seen as XP is starting up.  Certainly can
+            # be seen if explorer.exe is not running when started.
+            print "Ignoring error adding taskbar icon - explorer may not " \
+                  "be running (yet)."
+            # The TaskbarRestart message will fire in this case, and
+            # everything will work out :)
 
     def BuildToolTip(self):
         tip = None
@@ -388,6 +397,11 @@ class MainWindow(object):
             return
         function()
 
+    def OnTaskbarRestart(self, hwnd, msg, wparam, lparam):
+        # Called as the taskbar is created (either as Windows starts, or
+        # as Windows recovers from a crashed explorer.exe)
+        self._AddTaskbarIcon()
+
     def OnExit(self):
         if self.started and not self.use_service:
             try:
@@ -504,45 +518,73 @@ class MainWindow(object):
         else:
             self.ShowMessage("SpamBayes is not running.")
 
+    def GetHelp(self):
+        # We don't need to be running for this.
+        self.ShowHTML("troubleshooting.html")
+
+    def ShowHTML(self, url):
+        """Displays the main SpamBayes documentation in your Web browser"""
+        # Stolen from Outlook's Manager.py
+        import sys, os, urllib
+        if urllib.splittype(url)[0] is None: # just a file spec
+            if hasattr(sys, "frozen"):
+                # New binary is in ../docs/sb_server relative to executable.
+                fname = os.path.join(os.path.dirname(sys.argv[0]),
+                                     "..", "docs", "sb_server", url)
+                if not os.path.isfile(fname):
+                    # Still support same directory as to the executable.
+                    fname = os.path.join(os.path.dirname(sys.argv[0]), url)
+            else:
+                # ../windows/docs dir
+                fname = os.path.join(os.path.dirname(__file__), "docs", url)
+            fname = os.path.abspath(fname)
+            if not os.path.isfile(fname):
+                self.ShowMessage("Can't find "+url)
+                return
+            url = fname
+        # else assume it is valid!
+        SetWaitCursor(1)
+        os.startfile(url)
+        SetWaitCursor(0)
+
     def CheckVersion(self):
         # Stolen, with few modifications, from addin.py
-        from spambayes.Version import get_version_string, \
-             get_version_number, fetch_latest_dict
-        if hasattr(sys, "frozen"):
-            version_number_key = "BinaryVersion"
-            version_string_key = "Full Description Binary"
-        else:
-            version_number_key = "Version"
-            version_string_key = "Full Description"
+        from spambayes.Version import get_current_version, get_version, \
+                get_download_page, fetch_latest_dict
 
         app_name = "POP3 Proxy"
-        cur_ver_string = get_version_string(app_name, version_string_key)
-        cur_ver_num = get_version_number(app_name, version_number_key)
+        app_display_name = "SpamBayes POP3 Proxy"
+        ver_current = get_current_version()
+        cur_ver_string = ver_current.get_long_version(app_display_name)
 
         try:
             SetWaitCursor(1)
             latest = fetch_latest_dict()
             SetWaitCursor(0)
-            try:
-                latest_ver_string = get_version_string(app_name, version_string_key,
-                                                       version_dict=latest)
-                latest_ver_num = get_version_number(app_name, version_number_key,
-                                                    version_dict=latest)
-            except KeyError:
-                # "Full Description Binary" not in the version currently on the web
-                latest_ver_string = "0.1"
-                latest_ver_num = 0.1
+            ver_latest = get_version(app_name, version_dict=latest)
+            latest_ver_string = ver_latest.get_long_version(app_display_name)
         except:
             self.ShowMessage("Error checking the latest version")
             traceback.print_exc()
             return
 
-        self.ShowMessage("Current version is %s, latest is %s." % \
-                         (cur_ver_string, latest_ver_string))
-        if latest_ver_num > cur_ver_num:
-            url = get_version_string(app_name, "Download Page", version_dict=latest)
-            # Offer to open up the url
-##                os.startfile(url)
+        ver_message = "Current version is %s.\r\n" \
+                      "Latest version is %s.\r\n\r\n" % \
+                      (cur_ver_string, latest_ver_string)
+        if ver_latest == ver_current:
+            ver_message += "Your are running the latest downloadable version."
+        elif ver_current > ver_latest:
+            ver_message += "Your current version is newer than the latest " \
+                           "downloadable version."
+        else:
+            ver_message += "There is a newer version available.  You may " \
+                           "download the updated version from:\r\n"
+            url = get_download_page(app_name, version_dict=latest)
+            ver_message += url
+        self.ShowMessage(ver_message)
+        # It would be nice to offer to open up the url if there is a
+        # newer version, but we don't do that yet.
+##          os.startfile(url)
 
     def ShowMessage(self, msg):
         MessageBox(self.hwnd, msg, "SpamBayes", win32con.MB_OK)

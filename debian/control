@@ -1,16 +1,17 @@
 Source: spambayes
 Section: mail
 Priority: optional
-Maintainer: Alexandre Fayolle <afayolle@debian.org>
-Build-Depends: debhelper (>= 7.0.50), python (>=2.3.5-7)
-Build-Depends-Indep: python-support (>=0.5.3)
-Standards-Version: 3.9.1
-XS-Python-Version: current
-Homepage: http://spambayes.sourceforge.net 
+Maintainer:Python Applications Packaging Team <python-apps-team@lists.alioth.debian.org>
+Uploaders: Alexandre Fayolle <afayolle@debian.org>
+Build-Depends: debhelper (>= 7.0.50), python (>=2.6.6-3~), python-setuptools, python-lockfile
+Standards-Version: 3.9.2
+X-Python-Version: >= 2.6
+Homepage: http://spambayes.sourceforge.net
+Vcs-Svn: svn://svn.debian.org/svn/python-apps/packages/spambayes/trunk
+Vcs-Browser: http://svn.debian.org/viewsvn/python-apps/packages/spambayes/trunk
 
 Package: spambayes
 Architecture: all
-XB-Python-Version: ${python:Versions}
 Depends: ${python:Depends}, ${misc:Depends}
 Description: Python-based spam filter using statistical analysis
  SpamBayes uses a different set of algorithm to most statistical spam
@@ -18,9 +19,9 @@ Description: Python-based spam filter using statistical analysis
  mail classified as spam, through the introduction of an 'unsure'
  category.
  .
- SpamBayes can be used as a POP3 or an IMAP proxy, as well as a simple 
- mail filter for use with procmail. 
- 
+ SpamBayes can be used as a POP3 or an IMAP proxy, as well as a simple
+ mail filter for use with procmail.
+
 
 
 

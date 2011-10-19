@@ -37,18 +37,12 @@ To do:
  o Suggestions?
 """
 
-# This module is part of the spambayes project, which is Copyright 2002-3
+# This module is part of the spambayes project, which is Copyright 2002-2007
 # The Python Software Foundation and is covered by the Python Software
 # Foundation license.
 
 __author__ = "Tony Meyer <ta-meyer@ihug.co.nz>"
 __credits__ = "All the Spambayes folk."
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
 
 ## Tested with:
 ##  o Eudora 5.2 on Windows XP
@@ -289,7 +283,7 @@ def configure_mozilla(config_location):
         m = r.search(prefs[current_pos:])
         if not m:
             break
-        current_pos = m.end()
+        current_pos += m.end()
         server_num = m.group(1)
         server = m.group(2)
         old_pref = 'user_pref("mail.smtpserver.smtp%s.hostname", ' \
@@ -298,7 +292,8 @@ def configure_mozilla(config_location):
                    '"127.0.0.1");' % (server_num,)
 
         # Find the port
-        port_string = 'user_pref("mail.smtpserver.smtp1.port", '
+        port_string = 'user_pref("mail.smtpserver.smtp%d.port", ' \
+                      % (server_num,)
         port_loc = prefs.find(port_string)
         if port_loc == -1:
             port = "25"
@@ -338,8 +333,8 @@ def configure_mozilla(config_location):
     # it would be to create new Mozilla mail folders.
     filter_filename = "%s%smsgFilterRules.dat" % (config_location, os.sep)
     store_name = "" # how do we get this?
-    spam_folder_url = "mailbox:////%s//Junk%20Mail" % (store_name,)
-    unsure_folder_url = "mailbox:////%s//Possible%20Junk" % (store_name,)
+    spam_folder_url = "mailbox:////%s//Junk%%20Mail" % (store_name,)
+    unsure_folder_url = "mailbox:////%s//Possible%%20Junk" % (store_name,)
     header_name = options["Headers", "classification_header_name"]
     spam_tag = options["Headers", "header_spam_string"]
     unsure_tag = options["Headers", "header_unsure_string"]
@@ -448,14 +443,19 @@ def configure_outlook_express(unused):
     for proto, subkey, account in accounts:
         if proto == "POP3":
             for (server_key, port_key), sect in translate.items():
-                server = "%s:%s" % (account[server_key][0],
-                                    account[port_key][0])
                 if sect[:4] == "pop3":
+                    default_port = 110
                     pop_proxy = move_to_next_free_port(pop_proxy)
                     proxy = pop_proxy
                 else:
+                    default_port = 25
                     smtp_proxy = move_to_next_free_port(smtp_proxy)
                     proxy = smtp_proxy
+                if account.has_key(port_key):
+                    port = account[port_key][0]
+                else:
+                    port = default_port
+                server = "%s:%s" % (account[server_key][0], port)
                 options[sect, "remote_servers"] += (server,)
                 options[sect, "listen_ports"] += (proxy,)
                 win32api.RegSetValueEx(subkey, server_key, 0,
@@ -490,7 +490,6 @@ def configure_pegasus_mail(config_location):
     results = []
     for filename in os.listdir(config_location):
         if filename.lower().startswith("pop") or filename.lower().startswith("smt"):
-            full_filename = os.path.join(config_location, filename)
             working_filename = "%s.tmp" % (filename, )
             shutil.copyfile(filename, working_filename)
             c = OptionsClass.OptionsClass()

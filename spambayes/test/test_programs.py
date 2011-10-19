@@ -8,12 +8,6 @@ from urllib import urlopen, urlencode
 import sb_test_support
 sb_test_support.fix_sys_path()
 
-try:
-    True;False
-except NameError: # 2.2 compat
-    True=(None is None);
-    False=not True
-
 import sb_server
 
 from spambayes.Options import options
@@ -157,7 +151,7 @@ class TestServer(unittest.TestCase):
         spawner.stop()
         self.failUnless(not spawner.is_running(), "didn't stop after stop")
         self.failUnless(not is_any_sb_server_running(),
-                "Platform mutex still help after stop")
+                "Platform mutex still held after stop")
     def test_sb_server_default(self):
         # Should be using the default port from the options file.
         from spambayes.Options import options

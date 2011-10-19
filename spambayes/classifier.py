@@ -38,11 +38,6 @@ from __future__ import generators
 # This implementation is due to Tim Peters et alia.
 
 import math
-import types
-try:
-    from sets import Set
-except ImportError:
-    from spambayes.compatsets import Set
 
 # XXX At time of writing, these are only necessary for the
 # XXX experimental url retrieving/slurping code.  If that
@@ -52,18 +47,8 @@ import re
 import os
 import sys
 import socket
-import pickle
 import urllib2
 from email import message_from_string
-
-try:
-    enumerate
-except NameError:
-    def enumerate(seq):
-        i = 0
-        for elt in seq:
-            yield (i, elt)
-            i += 1
 
 DOMAIN_AND_PORT_RE = re.compile(r"([^:/\\]+)(:([\d]+))?")
 HTTP_ERROR_RE = re.compile(r"HTTP Error ([\d]+)")
@@ -72,13 +57,7 @@ URL_KEY_RE = re.compile(r"[\W]")
 
 from spambayes.Options import options
 from spambayes.chi2 import chi2Q
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-
+from spambayes.safepickle import pickle_read, pickle_write
 
 LN2 = math.log(2)       # used frequently by chi-combining
 
@@ -220,7 +199,7 @@ class Classifier:
             prob = 0.5
 
         if evidence:
-            clues = [(w, p) for p, w, r in clues]
+            clues = [(w, p) for p, w, _r in clues]
             clues.sort(lambda a, b: cmp(a[1], b[1]))
             clues.insert(0, ('*S*', S))
             clues.insert(0, ('*H*', H))
@@ -244,7 +223,7 @@ class Classifier:
         if len(clues) < options["Classifier", "max_discriminators"] and \
            prob > h_cut and prob < s_cut and slurp_wordstream:
             slurp_tokens = list(self._generate_slurp())
-            slurp_tokens.extend([w for (w,p) in clues])
+            slurp_tokens.extend([w for (w, _p) in clues])
             sprob, sclues = self.chi2_spamprob(slurp_tokens, True)
             if sprob < h_cut or sprob > s_cut:
                 prob = sprob
@@ -266,7 +245,7 @@ class Classifier:
         True, you're telling the classifier this message is definitely spam,
         else that it's definitely not spam.
         """
-        if options["Classifier", "x-use_bigrams"]:
+        if options["Classifier", "use_bigrams"]:
             wordstream = self._enhance_wordstream(wordstream)
         if options["URLRetriever", "x-slurp_urls"]:
             wordstream = self._add_slurped(wordstream)
@@ -277,7 +256,7 @@ class Classifier:
 
         Pass the same arguments you passed to learn().
         """
-        if options["Classifier", "x-use_bigrams"]:
+        if options["Classifier", "use_bigrams"]:
             wordstream = self._enhance_wordstream(wordstream)
         if options["URLRetriever", "x-slurp_urls"]:
             wordstream = self._add_slurped(wordstream)
@@ -305,10 +284,10 @@ class Classifier:
         nham = float(self.nham or 1)
         nspam = float(self.nspam or 1)
 
-        assert hamcount <= nham
+        assert hamcount <= nham, "Token seen in more ham than ham trained."
         hamratio = hamcount / nham
 
-        assert spamcount <= nspam
+        assert spamcount <= nspam, "Token seen in more spam than spam trained."
         spamratio = spamcount / nspam
 
         prob = spamratio / (hamratio + spamratio)
@@ -371,7 +350,7 @@ class Classifier:
         else:
             self.nham += 1
 
-        for word in Set(wordstream):
+        for word in set(wordstream):
             record = self._wordinfoget(word)
             if record is None:
                 record = self.WordInfoClass()
@@ -396,7 +375,7 @@ class Classifier:
                 raise ValueError("non-spam count would go negative!")
             self.nham -= 1
 
-        for word in Set(wordstream):
+        for word in set(wordstream):
             record = self._wordinfoget(word)
             if record is not None:
                 if is_spam:
@@ -429,7 +408,7 @@ class Classifier:
     def _getclues(self, wordstream):
         mindist = options["Classifier", "minimum_prob_strength"]
 
-        if options["Classifier", "x-use_bigrams"]:
+        if options["Classifier", "use_bigrams"]:
             # This scheme mixes single tokens with pairs of adjacent tokens.
             # wordstream is "tiled" into non-overlapping unigrams and
             # bigrams.  Non-overlap is important to prevent a single original
@@ -448,9 +427,9 @@ class Classifier:
             push = raw.append
             pair = None
             # Keep track of which tokens we've already seen.
-            # Don't use a Set here!  This is an innermost loop, so speed is
+            # Don't use a set here!  This is an innermost loop, so speed is
             # important here (direct dict fiddling is much quicker than
-            # invoking Python-level Set methods; in Python 2.4 that will
+            # invoking Python-level set methods; in Python 2.4 that will
             # change).
             seen = {pair: 1} # so the bigram token is skipped on 1st loop trip
             for i, token in enumerate(wordstream):
@@ -485,11 +464,11 @@ class Classifier:
             clues.reverse()
 
         else:
-            # The all-unigram scheme just scores the tokens as-is.  A Set()
+            # The all-unigram scheme just scores the tokens as-is.  A set()
             # is used to weed out duplicates at high speed.
             clues = []
             push = clues.append
-            for word in Set(wordstream):
+            for word in set(wordstream):
                 tup = self._worddistanceget(word)
                 if tup[0] >= mindist:
                     push(tup)
@@ -533,8 +512,8 @@ class Classifier:
         which could be "word" in a subject, or a bigram of "subject:" and
         "word").
 
-        If the experimental "Classifier":"x-use_bigrams" option is
-        removed, this function can be removed, too.
+        If the "Classifier":"use_bigrams" option is removed, this function
+        can be removed, too.
         """
 
         last = None
@@ -596,7 +575,7 @@ class Classifier:
         if not os.path.exists(dir):
             # Create the directory.
             if options["globals", "verbose"]:
-                print >>sys.stderr, "Creating URL cache directory"
+                print >> sys.stderr, "Creating URL cache directory"
             os.makedirs(dir)
 
         self.urlCorpus = ExpiryFileCorpus(age, FileMessageFactory(),
@@ -608,18 +587,16 @@ class Classifier:
         self.bad_url_cache_name = os.path.join(dir, "bad_urls.pck")
         self.http_error_cache_name = os.path.join(dir, "http_error_urls.pck")
         if os.path.exists(self.bad_url_cache_name):
-            b_file = file(self.bad_url_cache_name, "r")
             try:
-                self.bad_urls = pickle.load(b_file)
-            except IOError, ValueError:
+                self.bad_urls = pickle_read(self.bad_url_cache_name)
+            except (IOError, ValueError):
                 # Something went wrong loading it (bad pickle,
                 # probably).  Start afresh.
                 if options["globals", "verbose"]:
-                    print >>sys.stderr, "Bad URL pickle, using new."
+                    print >> sys.stderr, "Bad URL pickle, using new."
                 self.bad_urls = {"url:non_resolving": (),
                                  "url:non_html": (),
                                  "url:unknown_error": ()}
-            b_file.close()
         else:
             if options["globals", "verbose"]:
                 print "URL caches don't exist: creating"
@@ -627,16 +604,14 @@ class Classifier:
                         "url:non_html": (),
                         "url:unknown_error": ()}
         if os.path.exists(self.http_error_cache_name):
-            h_file = file(self.http_error_cache_name, "r")
             try:
-                self.http_error_urls = pickle.load(h_file)
+                self.http_error_urls = pickle_read(self.http_error_cache_name)
             except IOError, ValueError:
                 # Something went wrong loading it (bad pickle,
                 # probably).  Start afresh.
                 if options["globals", "verbose"]:
-                    print >>sys.stderr, "Bad HHTP error pickle, using new."
+                    print >> sys.stderr, "Bad HHTP error pickle, using new."
                 self.http_error_urls = {}
-            h_file.close()
         else:
             self.http_error_urls = {}
 
@@ -646,17 +621,7 @@ class Classifier:
         # XXX becomes valid, for example).
         for name, data in [(self.bad_url_cache_name, self.bad_urls),
                            (self.http_error_cache_name, self.http_error_urls),]:
-            # Save to a temp file first, in case something goes wrong.
-            cache = open(name + ".tmp", "w")
-            pickle.dump(data, cache)
-            cache.close()
-            try:
-                os.rename(name + ".tmp", name)
-            except OSError:
-                # Atomic replace isn't possible with win32, so just
-                # remove and rename.
-                os.remove(name)
-                os.rename(name + ".tmp", name)
+            pickle_write(name, data)
 
     def slurp(self, proto, url):
         # We generate these tokens:
@@ -672,6 +637,11 @@ class Classifier:
         # doesn't cost us anything apart from another entry in the db, and
         # it's only two entries, plus one for each type of http error
         # encountered, so it's pretty neglible.
+        # If there is no content in the URL, then just return immediately.
+        # "http://)" will trigger this.
+        if not url:
+            return ["url:non_resolving"]
+        
         from spambayes.tokenizer import Tokenizer
 
         if options["URLRetriever", "x-only_slurp_base"]:
@@ -692,7 +662,7 @@ class Classifier:
         else:
             port = mo.group(3)
         try:
-            not_used = socket.getaddrinfo(domain, port)
+            _unused = socket.getaddrinfo(domain, port)
         except socket.error:
             self.bad_urls["url:non_resolving"] += (url,)
             return ["url:non_resolving"]
@@ -711,9 +681,18 @@ class Classifier:
                 self.bad_urls["url:non_html"] += (url,)
                 return ["url:non_html"]
 
+            # Waiting for the default timeout period slows everything
+            # down far too much, so try and reduce it for just this
+            # call (this will only work with Python 2.3 and above).
+            try:
+                timeout = socket.getdefaulttimeout()
+                socket.setdefaulttimeout(5)
+            except AttributeError:
+                # Probably Python 2.2.
+                pass
             try:
                 if options["globals", "verbose"]:
-                    print >>sys.stderr, "Slurping", url
+                    print >> sys.stderr, "Slurping", url
                 f = urllib2.urlopen("%s://%s" % (proto, url))
             except (urllib2.URLError, socket.error), details:
                 mo = HTTP_ERROR_RE.match(str(details))
@@ -722,6 +701,12 @@ class Classifier:
                     return ["url:http_" + mo.group(1)]
                 self.bad_urls["url:unknown_error"] += (url,)
                 return ["url:unknown_error"]
+            # Restore the timeout
+            try:
+                socket.setdefaulttimeout(timeout)
+            except AttributeError:
+                # Probably Python 2.2.
+                pass
 
             try:
                 # Anything that isn't text/html is ignored
@@ -743,8 +728,8 @@ class Classifier:
 
             # Retrieving the same messages over and over again will tire
             # us out, so we store them in our own wee cache.
-            message = self.urlCorpus.makeMessage(url_key)
-            message.setPayload(fake_message_string)
+            message = self.urlCorpus.makeMessage(url_key,
+                                                 fake_message_string)
             self.urlCorpus.addMessage(message)
         else:
             fake_message_string = cached_message.as_string()
@@ -775,7 +760,7 @@ class Classifier:
         # would become http://massey.ac.nz and http://id.example.com
         # would become http://example.com
         url += '/'
-        domain, garbage = url.split('/', 1)
+        domain = url.split('/', 1)[0]
         parts = domain.split('.')
         if len(parts) > 2:
             base_domain = parts[-2] + '.' + parts[-1]

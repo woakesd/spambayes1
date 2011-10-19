@@ -24,23 +24,12 @@ import getopt
 import mailbox
 import random
 import re
-try:
-    from sets import Set
-except ImportError:
-    from spambayes.compatsets import Set
 import sys
 
 from spambayes.tokenizer import tokenize
 from spambayes.TestDriver import Driver
 from spambayes.msgs import Msg
 from spambayes.Options import options
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-
 
 mbox_fmts = {"unix": mailbox.PortableUnixMailbox,
              "mmdf": mailbox.MmdfMailbox,
@@ -113,7 +102,7 @@ def randindices(nelts, nresults):
     random.shuffle(L)
     chunk = nelts / nresults
     for i in range(nresults):
-        yield Set(L[:chunk])
+        yield set(L[:chunk])
         del L[:chunk]
 
 def sort(seq):

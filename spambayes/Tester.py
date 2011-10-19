@@ -1,12 +1,5 @@
 from spambayes.Options import options
 
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-
-
 class Test:
     # Pass a classifier instance (an instance of Bayes).
     # Loop:
@@ -27,8 +20,7 @@ class Test:
     #             false_negative_rate(), false_positive_rate(),
     #             false_negatives(), and false_positives()
 
-    def __init__(self, classifier):
-        self.set_classifier(classifier)
+    def __init__(self):
         self.reset_test_results()
 
     # Tell the tester which classifier to use.
@@ -42,10 +34,10 @@ class Test:
         # The number of test instances correctly and incorrectly classified.
         self.nham_right = 0
         self.nham_wrong = 0
-        self.nham_unsure = 0;
+        self.nham_unsure = 0
         self.nspam_right = 0
         self.nspam_wrong = 0
-        self.nspam_unsure = 0;
+        self.nspam_unsure = 0
 
         # Lists of bad predictions.
         self.ham_wrong_examples = []    # False positives:  ham called spam.
@@ -157,7 +149,8 @@ _easy_test = """
     >>> good2 = _Example('', ['a', 'b'])
     >>> bad1 = _Example('', ['c', 'd'])
 
-    >>> t = Test(Bayes())
+    >>> t = Test()
+    >>> t.set_classifier(Bayes())
     >>> t.train([good1, good2], [bad1])
     >>> t.predict([_Example('goodham', ['a', 'b']),
     ...            _Example('badham', ['d'])    # FP
@@ -194,9 +187,6 @@ _easy_test = """
 
 __test__ = {'easy': _easy_test}
 
-def _test():
-    import doctest, Tester
-    doctest.testmod(Tester)
-
 if __name__ == '__main__':
-    _test()
+    import doctest
+    doctest.testmod()

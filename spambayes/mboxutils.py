@@ -30,9 +30,15 @@ import re
 import traceback
 
 class DirOfTxtFileMailbox:
-
     """Directory of files each assumed to contain an RFC-822 message.
 
+    If the filename ends with ".emlx", assumes that the file is an
+    RFC-822 message wrapped in Apple Mail's proprietory .emlx format.
+    The emlx format is simply the length of the message (as a string
+    on the first line, then the raw message text, then the contents of
+    a plist (XML) file that contains data that Mail uses (subject,
+    flags, sender, and so forth).  We ignore this plist data).
+    
     Subdirectories are traversed recursively.
     """
 
@@ -46,6 +52,11 @@ class DirOfTxtFileMailbox:
             if os.path.isdir(name):
                 for mbox in DirOfTxtFileMailbox(name, self.factory):
                     yield mbox
+            elif os.path.splitext(name)[1] == ".emlx":
+                f = open(name)
+                length = int(f.readline().rstrip())
+                yield self.factory(f.read(length))
+                f.close()
             else:
                 try:
                     f = open(name)
@@ -54,6 +65,14 @@ class DirOfTxtFileMailbox:
                 yield self.factory(f)
                 f.close()
 
+def full_messages(msgs):
+    """A generator that transforms each message by calling its
+    get_full_message() method.  Used for IMAP messages since they don't really
+    have their content by default.
+    """
+    for x in msgs:
+        yield x.get_full_message()
+    
 def _cat(seqs):
     for seq in seqs:
         for item in seq:
@@ -87,6 +106,38 @@ def getmbox(name):
         else:
             return _cat(mboxes)
 
+    elif name.startswith(":"):
+        # IMAP mailbox name:
+        #   :username:password@server:folder1,...folderN
+        #   :username:password@server:port:folder1,...folderN
+        #   :username:password@server:ALL
+        #   :username:password@server:port:ALL
+        parts = re.compile(
+':(?P<user>[^@:]+):(?P<pwd>[^@]+)@(?P<server>[^:]+(:[0-9]+)?):(?P<name>[^:]+)'
+        ).match(name).groupdict()
+        
+        from scripts.sb_imapfilter import IMAPSession, IMAPFolder
+        from spambayes import Stats, message
+        from spambayes.Options import options
+        
+        session = IMAPSession(parts['server'])
+        session.login(parts['user'], parts['pwd'])
+        folder_list = session.folder_list()
+        
+        if name == "ALL":
+            names = folder_list
+        else:
+            names = parts['name'].split(',')
+
+        message_db = message.Message().message_info_db
+        stats = Stats.Stats(options, message_db)
+        mboxes = [IMAPFolder(n, session, stats) for n in names]
+        
+        if len(mboxes) == 1:
+            return full_messages(mboxes[0])
+        else:
+            return _cat([full_messages(x) for x in mboxes])
+        
     if os.path.isdir(name):
         # XXX Bogus: use a Maildir if /cur is a subdirectory, else a MHMailbox
         # if the pathname contains /Mail/, else a DirOfTxtFileMailbox.
@@ -116,7 +167,7 @@ def get_message(obj):
     Note that we can't use our own message class here, because this
     function is imported by tokenizer, and our message class imports
     tokenizer, so we get a circular import problem.  In any case, this
-    function does need anything that our message class offers, so that
+    function does not need anything that our message class offers, so that
     shouldn't matter.
     """
 
@@ -146,6 +197,11 @@ def as_string(msg, unixfrom=False):
 
     To Do: This really should be done by subclassing email.Message.Message
     and making this function the as_string() method.  After 1.0.
+
+    [Tony] Better: sb_filter & sb_mboxtrain should stop using this and
+    start using the spambayes.Message classes.  They might need a little
+    bit of rearranging, but that should work nicely, and mean that all
+    this code is together in one place.
     """
     if isinstance(msg, str):
         return msg
@@ -212,9 +268,6 @@ def extract_headers(text):
         text = ""
     return text
 
-def _test():
-    import doctest, mboxutils
-    return doctest.testmod(mboxutils)
-
 if __name__ == "__main__":
-    _test()
+    import doctest
+    doctest.testmod()

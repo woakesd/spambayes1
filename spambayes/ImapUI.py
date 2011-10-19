@@ -12,12 +12,12 @@ may also wish to look up words in the database, or classify a message.
 
 The following functions are currently included:
 [From the base class UserInterface]
-  onClassify - classify a given message
-  onWordquery - query a word from the database
-  onTrain - train a message or mbox
-  onSave - save the database and possibly shutdown
+    onClassify - classify a given message
+    onWordquery - query a word from the database
+    onTrain - train a message or mbox
+    onSave - save the database and possibly shutdown
 [Here]
-  onHome - a home page with various options
+    onHome - a home page with various options
 
 To do:
  o This could have a neat review page, like pop3proxy, built up by
@@ -28,25 +28,17 @@ To do:
  o Suggestions?
 """
 
-# This module is part of the spambayes project, which is Copyright 2002-3
+# This module is part of the spambayes project, which is Copyright 2002-2007
 # The Python Software Foundation and is covered by the Python Software
 # Foundation license.
 
 __author__ = "Tony Meyer <ta-meyer@ihug.co.nz>, Tim Stone"
 __credits__ = "All the Spambayes folk."
 
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-
-import re
 import cgi
-import types
 
-import UserInterface
-from spambayes.Options import options, optionsPathname
+from spambayes import UserInterface
+from spambayes.Options import options, optionsPathname, _
 
 # These are the options that will be offered on the configuration page.
 # If the option is None, then the entry is a header and the following
@@ -54,7 +46,7 @@ from spambayes.Options import options, optionsPathname
 # These are also used to generate http request parameters and template
 # fields/variables.
 parm_map = (
-    ('IMAP Options',          None),
+    (_('IMAP Options'),       None),
     ('imap',                  'server'),
     ('imap',                  'username'),
     # to display, or not to display; that is the question!
@@ -64,13 +56,13 @@ parm_map = (
     # on the other hand, we have to be able to enter it somehow...
     ('imap',                  'password'),
     ('imap',                  'use_ssl'),
-    ('Header Options',        None),
+    (_('Header Options'),     None),
     ('Headers',               'notate_to'),
     ('Headers',               'notate_subject'),
-    ('Storage Options',       None),
+    (_('Storage Options'),    None),
     ('Storage',               'persistent_storage_file'),
     ('Storage',               'messageinfo_storage_file'),
-    ('Statistics Options',    None),
+    (_('Statistics Options'), None),
     ('Categorization',        'ham_cutoff'),
     ('Categorization',        'spam_cutoff'),
 )
@@ -78,37 +70,54 @@ parm_map = (
 # Like the above, but hese are the options that will be offered on the
 # advanced configuration page.
 adv_map = (
-    ('Statistics Options',  None),
-    ('Classifier',          'max_discriminators'),
-    ('Classifier',          'minimum_prob_strength'),
-    ('Classifier',          'unknown_word_prob'),
-    ('Classifier',          'unknown_word_strength'),
-    ('Header Options',      None),
-    ('Headers',             'include_score'),
-    ('Headers',             'header_score_digits'),
-    ('Headers',             'header_score_logarithm'),
-    ('Headers',             'include_thermostat'),
-    ('Headers',             'include_evidence'),
-    ('Headers',             'clue_mailheader_cutoff'),
-    ('Storage Options',     None),
-    ('Storage',             'persistent_use_database'),
-    ('Tokenising Options',  None),
-    ('Tokenizer',           'mine_received_headers'),
-    ('Tokenizer',           'replace_nonascii_chars'),
-    ('Tokenizer',           'summarize_email_prefixes'),
-    ('Tokenizer',           'summarize_email_suffixes'),
-    ('Tokenizer',           'x-pick_apart_urls'),
-    ('Interface Options',   None),
-    ('html_ui',             'display_adv_find'),
-    ('html_ui',             'allow_remote_connections'),
-    ('html_ui',             'http_authentication'),
-    ('html_ui',             'http_user_name'),
-    ('html_ui',             'http_password'),
+    (_('Statistics Options'), None),
+    ('Classifier',            'max_discriminators'),
+    ('Classifier',            'minimum_prob_strength'),
+    ('Classifier',            'unknown_word_prob'),
+    ('Classifier',            'unknown_word_strength'),
+    ('Classifier',            'use_bigrams'),
+    (_('Header Options'),     None),
+    ('Headers',               'include_score'),
+    ('Headers',               'header_score_digits'),
+    ('Headers',               'header_score_logarithm'),
+    ('Headers',               'include_thermostat'),
+    ('Headers',               'include_evidence'),
+    ('Headers',               'clue_mailheader_cutoff'),
+    (_('Storage Options'),    None),
+    ('Storage',               'persistent_use_database'),
+    (_('Tokenising Options'), None),
+    ('Tokenizer',             'mine_received_headers'),
+    ('Tokenizer',             'replace_nonascii_chars'),
+    ('Tokenizer',             'summarize_email_prefixes'),
+    ('Tokenizer',             'summarize_email_suffixes'),
+    ('Tokenizer',             'x-pick_apart_urls'),
+    (_('Interface Options'),  None),
+    ('html_ui',               'display_adv_find'),
+    ('html_ui',               'allow_remote_connections'),
+    ('html_ui',               'http_authentication'),
+    ('html_ui',               'http_user_name'),
+    ('html_ui',               'http_password'),
+    ('globals',               'language'),
 )
+
+
+# This is here because we need to refer to it here, and in sb_imapfilter.
+# I suppose it really belongs somewhere else, where both can refer to it,
+# but there isn't any such place, and creating it just for this is rather
+# pointless.
+class LoginFailure(Exception):
+    """Login to the IMAP server failed."""
+    def __init__(self, details):
+        self.details = details
+    def __str__(self):
+        return "Login failure: %s" % (self.details,)
+
 
 class IMAPUserInterface(UserInterface.UserInterface):
     """Serves the HTML user interface for the proxies."""
-    def __init__(self, cls, imap, pwd, imap_session_class):
+    def __init__(self, cls, imaps, pwds, imap_session_class,
+                 lang_manager=None, stats=None,
+                 close_db=None, change_db=None):
         global parm_map
         # Only offer SSL if it is available
         try:
@@ -119,13 +128,15 @@ class IMAPUserInterface(UserInterface.UserInterface):
             parm_map = tuple(parm_list)
         else:
             del IMAP4_SSL
-        UserInterface.UserInterface.__init__(self, cls, parm_map, adv_map)
+        UserInterface.UserInterface.__init__(self, cls, parm_map, adv_map,
+                                             lang_manager, stats)
         self.classifier = cls
-        self.imap = imap
-        self.imap_pwd = pwd
-        self.imap_logged_in = False
-        self.app_for_version = "IMAP Filter"
+        self.imaps = imaps
+        self.imap_pwds = pwds
+        self.app_for_version = "SpamBayes IMAP Filter"
         self.imap_session_class = imap_session_class
+        self.close_database = close_db
+        self.change_db = change_db
 
     def onHome(self):
         """Serve up the homepage."""
@@ -135,21 +146,22 @@ class IMAPUserInterface(UserInterface.UserInterface):
         statusTable = self.html.statusTable.clone()
         del statusTable.proxyDetails
         # This could be a bit more modular
-        statusTable.configurationLink += """<br />&nbsp;&nbsp;&nbsp;&nbsp;
-        &nbsp;You can also <a href='filterfolders'>configure folders to
-        filter</a><br />and <a
-        href='trainingfolders'>Configure folders to train</a>"""
-        findBox = self._buildBox('Word query', 'query.gif',
+        statusTable.configurationLink += "<br />&nbsp;&nbsp;&nbsp;&nbsp;" \
+            "&nbsp;" + _("You can also <a href='filterfolders'>configure" \
+                         " folders to filter</a><br />and " \
+                         "<a href='trainingfolders'>Configure folders to" \
+                         " train</a>")
+        findBox = self._buildBox(_('Word query'), 'query.gif',
                                  self.html.wordQuery)
         if not options["html_ui", "display_adv_find"]:
             del findBox.advanced
-        content = (self._buildBox('Status and Configuration',
+        content = (self._buildBox(_('Status and Configuration'),
                                   'status.gif', statusTable % stateDict)+
                    self._buildTrainBox() +
                    self._buildClassifyBox() +
                    findBox
                    )
-        self._writePreamble("Home")
+        self._writePreamble(_("Home"))
         self.write(content)
         self._writePostamble()
 
@@ -157,42 +169,69 @@ class IMAPUserInterface(UserInterface.UserInterface):
         """Called by the config page when the user saves some new options, or
         restores the defaults."""
         # Re-read the options.
-        self.classifier.store()
         import Options
         Options.load_options()
         global options
         from Options import options
+        self.change_db()
 
     def onSave(self, how):
-        if self.imap is not None:
-            self.imap.logout()
+        for imap in self.imaps:
+            if imap:
+                imap.logout()
         UserInterface.UserInterface.onSave(self, how)
 
     def onFilterfolders(self):
-        self._writePreamble("Select Filter Folders")
+        self._writePreamble(_("Select Filter Folders"))
         self._login_to_imap()
-        if self.imap_logged_in:
-            available_folders = self.imap.folder_list()
-            content = self.html.configForm.clone()
-            content.configFormContent = ""
-            content.introduction = """This page allows you to change which
-            folders are filtered, and where filtered mail ends up."""
-            content.config_submit.value = "Save Filter Folders"
-            content.optionsPathname = optionsPathname
+        available_folders = []
+        for imap in self.imaps:
+            if imap and imap.logged_in:
+                available_folders.extend(imap.folder_list())
 
-            for opt in ("unsure_folder", "spam_folder",
-                        "filter_folders"):
-                folderBox = self._buildFolderBox("imap", opt, available_folders)
-                content.configFormContent += folderBox
-
+        if not available_folders:
+            content = self._buildBox(_("Error"), None,
+                                     _("No folders available"))
             self.write(content)
             self._writePostamble()
+            return
+
+        content = self.html.configForm.clone()
+        content.configFormContent = ""
+        content.introduction = _("This page allows you to change " \
+                                 "which folders are filtered, and " \
+                                 "where filtered mail ends up.")
+        content.config_submit.value = _("Save Filter Folders")
+        content.optionsPathname = optionsPathname
+
+        for opt in ("unsure_folder", "spam_folder",
+                    "filter_folders"):
+            folderBox = self._buildFolderBox("imap", opt, available_folders)
+            content.configFormContent += folderBox
+
+        self.write(content)
+        self._writePostamble()
 
     def _login_to_imap(self):
-        if self.imap_logged_in:
-            return
-        if self.imap is None and len(options["imap", "server"]) > 0:
-            server = options["imap", "server"][0]
+        new_imaps = []
+        for i in xrange(len(self.imaps)):
+            imap = self.imaps[i]
+            imap_logged_in = self._login_to_imap_server(imap, i)
+            if imap_logged_in:
+                new_imaps.append(imap_logged_in)
+        self.imaps = new_imaps
+            
+    def _login_to_imap_server(self, imap, i):
+        if imap and imap.logged_in:
+            return imap
+        if imap is None or not imap.connected:
+            try:
+                server = options["imap", "server"][i]
+            except KeyError:
+                content = self._buildBox(_("Error"), None,
+                                         _("Please check server/port details."))
+                self.write(content)
+                return None
             if server.find(':') > -1:
                 server, port = server.split(':', 1)
                 port = int(port)
@@ -201,66 +240,74 @@ class IMAPUserInterface(UserInterface.UserInterface):
                     port = 993
                 else:
                     port = 143
-            self.imap = self.imap_session_class(server, port)
-            if not self.imap.connected:
-              # Failed to connect.
-              content = self._buildBox("Error", None,
-                                       "Please check server/port details.")
-              self.write(content)
-              self._writePostamble()
-              return
-        if self.imap is None:
-            content = self._buildBox("Error", None,
-                                     """Must specify server details first.""")
+            imap = self.imap_session_class(server, port)
+            if not imap.connected:
+                # Failed to connect.
+                content = self._buildBox(_("Error"), None,
+                                         _("Please check server/port details."))
+                self.write(content)
+                return None
+        usernames = options["imap", "username"]
+        if not usernames:
+            content = self._buildBox(_("Error"), None,
+                                     _("Must specify username first."))
             self.write(content)
-            self._writePostamble()
-            return
-        username = options["imap", "username"]
-        if isinstance(username, types.TupleType):
-            username = username[0]
-        if not username:
-            content = self._buildBox("Error", None,
-                                     """Must specify username first.""")
-            self.write(content)
-            self._writePostamble()
-            return
-        if not self.imap_pwd:
+            return None
+        if not self.imap_pwds:
             self.imap_pwd = options["imap", "password"]
-            if isinstance(self.imap_pwd, types.TupleType):
-                self.imap_pwd = self.imap_pwd[0]
-        if not self.imap_pwd:
-            content = self._buildBox("Error", None,
-                                     """Must specify password first.""")
+        if not self.imap_pwds:
+            content = self._buildBox(_("Error"), None,
+                                     _("Must specify password first."))
             self.write(content)
-            self._writePostamble()
-            return
-        self.imap.login(username, self.imap_pwd)
-        self.imap_logged_in = True
+            return None
+        try:
+            imap.login(usernames[i], self.imap_pwds[i])
+        except KeyError:
+            content = self._buildBox(_("Error"), None,
+                                     _("Please check username/password details."))
+            self.write(content)
+            return None
+        except LoginFailure, e:
+            content = self._buildBox(_("Error"), None, str(e))
+            self.write(content)
+            return None
+        return imap
 
     def onTrainingfolders(self):
-        self._writePreamble("Select Training Folders")
+        self._writePreamble(_("Select Training Folders"))
         self._login_to_imap()
-        if self.imap_logged_in:
-            available_folders = self.imap.folder_list()
-            content = self.html.configForm.clone()
-            content.configFormContent = ""
-            content.introduction = """This page allows you to change which
-            folders contain mail to train Spambayes."""
-            content.config_submit.value = "Save Training Folders"
-            content.optionsPathname = optionsPathname
+        available_folders = []
+        for imap in self.imaps:
+            if imap and imap.logged_in:
+                available_folders.extend(imap.folder_list())
 
-            for opt in ("ham_train_folders",
-                        "spam_train_folders"):
-                folderBox = self._buildFolderBox("imap", opt, available_folders)
-                content.configFormContent += folderBox
-
+        if not available_folders:
+            content = self._buildBox(_("Error"), None,
+                                     _("No folders available"))
             self.write(content)
             self._writePostamble()
+            return
+
+        content = self.html.configForm.clone()
+        content.configFormContent = ""
+        content.introduction = _("This page allows you to change " \
+                                 "which folders contain mail to " \
+                                 "train Spambayes.")
+        content.config_submit.value = _("Save Training Folders")
+        content.optionsPathname = optionsPathname
+
+        for opt in ("ham_train_folders",
+                    "spam_train_folders"):
+            folderBox = self._buildFolderBox("imap", opt, available_folders)
+            content.configFormContent += folderBox
+
+        self.write(content)
+        self._writePostamble()
 
     def onChangeopts(self, **parms):
         backup = self.parm_ini_map
-        if parms["how"] == "Save Training Folders" or \
-           parms["how"] == "Save Filter Folders":
+        if parms["how"] == _("Save Training Folders") or \
+           parms["how"] == _("Save Filter Folders"):
             del parms["how"]
             self.parm_ini_map = ()
             for opt, value in parms.items():

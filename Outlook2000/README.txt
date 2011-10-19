@@ -1,7 +1,7 @@
 This directory contains tools for using the classifier with Microsoft
-Outlook 2000, courtesy of Sean True and Mark Hammond.  Note that you need 
-Python's win32com extensions (http://starship.python.net/crew/mhammond) and
-you *must* have win32all-149 or later.
+Outlook 2000, 2002, and 2003, courtesy of Sean True and Mark Hammond.  Note
+that you need Python's win32com extensions (http://starship.python.net/crew/mhammond)
+and you *must* have win32all-149 or later.
 
 Note that running "setup.py install" will *not* install the contents of this
 directory into the Python site-packages directory.  You will need to either
@@ -34,7 +34,7 @@ for the next time Outlook starts.  Re-executing 'addin.py' will ensure
 the addin is enabled (you can also locate and enable the addin via the 
 labyrinth of Outlook preference dialogs.)  If this happens and you have
 the Python exception that caused the failure (via the tracing mentioned 
-above) please send it to Mark.
+above) please send it to spambayes@python.org.
 
 To unregister the addin, execute "addin.py --unregister", then optionally
 remove the source files.  Note that as for the binary version, there is a

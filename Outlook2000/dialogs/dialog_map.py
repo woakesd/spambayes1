@@ -8,34 +8,62 @@ import wizard_processors as wiz
 
 from dialogs import ShowDialog, MakePropertyPage, ShowWizard
 
-try:
-    enumerate
-except NameError:   # enumerate new in 2.3
-    def enumerate(seq):
-        return [(i, seq[i]) for i in xrange(len(seq))]
-
 # "dialog specific" processors:
 class StatsProcessor(ControlProcessor):
+    def __init__(self, window, control_ids):
+        self.button_id = control_ids[1]
+        self.reset_date_id = control_ids[2]
+        ControlProcessor.__init__(self, window, control_ids)
+        self.stats = self.window.manager.stats
+
     def Init(self):
-        text = "\n".join(self.window.manager.stats.GetStats())
+        text = "\n".join(self.stats.GetStats())
         win32gui.SendMessage(self.GetControl(), win32con.WM_SETTEXT, 0, text)
 
-    def GetPopupHelpText(self, cid):
-        return "Displays statistics on mail processed by SpamBayes"
+        date_label = self.GetControl(self.reset_date_id)
+        if self.stats.from_date:
+            from time import localtime, strftime
+            reset_date = localtime(self.stats.from_date)
+            date_string = strftime("%a, %d %b %Y %I:%M:%S %p", reset_date)
+        else:
+            date_string = _("Never")
+        win32gui.SendMessage(date_label, win32con.WM_SETTEXT, 0, date_string)
+
+    def OnCommand(self, wparam, lparam):
+        id = win32api.LOWORD(wparam)
+        if id == self.button_id:
+            self.ResetStatistics()
+
+    def GetPopupHelpText(self, idFrom):
+        if idFrom == self.control_id:
+            return _("Displays statistics on mail processed by SpamBayes")
+        elif idFrom == self.button_id:
+            return _("Resets all SpamBayes statistics to zero")
+        elif idFrom == self.reset_date_id:
+            return _("The date and time when the SpamBayes statistics were last reset")
+
+    def ResetStatistics(self):
+        question = _("This will reset all your saved statistics to zero.\r\n\r\n" \
+                     "Are you sure you wish to reset the statistics?")
+        flags = win32con.MB_ICONQUESTION | win32con.MB_YESNO | win32con.MB_DEFBUTTON2
+        if win32gui.MessageBox(self.window.hwnd,
+                               question, "SpamBayes", flags) == win32con.IDYES:
+            self.stats.Reset()
+            self.stats.ResetTotal(True)
+            self.Init()  # update the statistics display
 
 class VersionStringProcessor(ControlProcessor):
     def Init(self):
-        from spambayes.Version import get_version_string
+        from spambayes.Version import get_current_version
         import sys
-        version_key = "Full Description"
-        if hasattr(sys, "frozen"):
-            version_key += " Binary"
-        version_string = get_version_string("Outlook", version_key)
-        win32gui.SendMessage(self.GetControl(), win32con.WM_SETTEXT,
-                             0, version_string)
+        v = get_current_version()
+        vstring = v.get_long_version("SpamBayes Outlook Addin")
+        if not hasattr(sys, "frozen"):
+            vstring += _(" from source")
+        win32gui.SendMessage(self.GetControl(), win32con.WM_SETTEXT, 0, vstring)
 
     def GetPopupHelpText(self, cid):
-        return "The version of SpamBayes running"
+        return _("The version of SpamBayes running")
 
 class TrainingStatusProcessor(ControlProcessor):
     def Init(self):
@@ -43,27 +71,24 @@ class TrainingStatusProcessor(ControlProcessor):
         nspam = bayes.nspam
         nham = bayes.nham
         if nspam > 10 and nham > 10:
-            db_status = "Database has %d good and %d spam." % (nham, nspam)
+            db_status = _("Database has %d good and %d spam.") % (nham, nspam)
             db_ratio = nham/float(nspam)
             big = small = None
             if db_ratio > 5.0:
-                big = "ham"
-                small = "spam"
-            elif db_ratio < (1/5.0):
-                big = "spam"
-                small = "ham"
-            if big is not None:
-                db_status = "%s\nWarning: you have much more %s than %s - " \
+                db_status = _("%s\nWarning: you have much more ham than spam - " \
                             "SpamBayes works best with approximately even " \
-                            "numbers of ham and spam." % (db_status, big,
-                                                          small)
+                            "numbers of ham and spam.") % (db_status, )
+            elif db_ratio < (1/5.0):
+                db_status = _("%s\nWarning: you have much more spam than ham - " \
+                            "SpamBayes works best with approximately even " \
+                            "numbers of ham and spam.") % (db_status, )
         elif nspam > 0 or nham > 0:
-            db_status = "Database only has %d good and %d spam - you should " \
-                        "consider performing additional training." % (nham, nspam)
+            db_status = _("Database only has %d good and %d spam - you should " \
+                        "consider performing additional training.") % (nham, nspam)
         else:
-            db_status = "Database has no training information.  SpamBayes " \
+            db_status = _("Database has no training information.  SpamBayes " \
                         "will classify all messages as 'unsure', " \
-                        "ready for you to train."
+                        "ready for you to train.")
         win32gui.SendMessage(self.GetControl(), win32con.WM_SETTEXT,
                              0, db_status)
 
@@ -73,13 +98,13 @@ class WizardTrainingStatusProcessor(ControlProcessor):
         nspam = bayes.nspam
         nham = bayes.nham
         if nspam > 10 and nham > 10:
-            msg = "SpamBayes has been successfully trained and configured.  " \
+            msg = _("SpamBayes has been successfully trained and configured.  " \
                   "You should find the system is immediately effective at " \
-                  "filtering spam."
+                  "filtering spam.")
         else:
-            msg = "SpamBayes has been successfully trained and configured.  " \
+            msg = _("SpamBayes has been successfully trained and configured.  " \
                   "However, as the number of messages trained is quite small, " \
-                  "SpamBayes may take some time to become truly effective."
+                  "SpamBayes may take some time to become truly effective.")
         win32gui.SendMessage(self.GetControl(), win32con.WM_SETTEXT,
                              0, msg)
 
@@ -136,25 +161,32 @@ class FilterStatusProcessor(ControlProcessor):
                                  0, reason)
             return
         if not manager.config.filter.enabled:
-            status = "Filtering is disabled.  Select 'Enable SpamBayes' to enable."
+            status = _("Filtering is disabled.  Select 'Enable SpamBayes' to enable.")
             win32gui.SendMessage(self.GetControl(), win32con.WM_SETTEXT,
                                  0, status)
             return
         # ok, enabled and working - put together the status text.
         config = manager.config.filter
         certain_spam_name = manager.FormatFolderNames(
-                                      [config.spam_folder_id], False)
+                                    [config.spam_folder_id], False)
         if config.unsure_folder_id:
             unsure_name = manager.FormatFolderNames(
                                     [config.unsure_folder_id], False)
-            unsure_text = "unsure managed in '%s'" % (unsure_name,)
+            unsure_text = _("Unsure managed in '%s'") % (unsure_name,)
         else:
-            unsure_text = "unsure messages untouched"
+            unsure_text = _("Unsure messages untouched")
+        if config.ham_folder_id:
+            ham_name = manager.FormatFolderNames(
+                                    [config.ham_folder_id], False)
+            ham_text = _("Good managed in '%s'") % (ham_name,)
+        else:
+            ham_text = _("Good messages untouched")
 
         watch_names = manager.FormatFolderNames(
                         config.watch_folder_ids, config.watch_include_sub)
-        filter_status = "Watching '%s'. Spam managed in '%s', %s." \
+        filter_status = _("Watching '%s'.\r\n%s.\r\nSpam managed in '%s'.\r\n%s.") \
                                 % (watch_names,
+                                   ham_text,
                                    certain_spam_name,
                                    unsure_text)
         win32gui.SendMessage(self.GetControl(), win32con.WM_SETTEXT,
@@ -246,15 +278,15 @@ def ShowLog(window):
         # current log always "spambayes1.log"
         log_name = os.path.join(win32api.GetTempPath(), "spambayes1.log")
         if not os.path.exists(log_name):
-            window.manager.ReportError("The log file for this session can not be located")
+            window.manager.ReportError(_("The log file for this session can not be located"))
         else:
             cmd = 'notepad.exe "%s"' % log_name
             win32api.WinExec(cmd, win32con.SW_SHOW)
     else:
-        question = "As you are running from source-code, viewing the\n" \
+        question = _("As you are running from source-code, viewing the\n" \
                    "log means executing a Python program.  If you already\n" \
                    "have a viewer running, the output may appear in either.\n\n"\
-                   "Do you want to execute this viewer?"
+                   "Do you want to execute this viewer?")
         if not window.manager.AskQuestion(question):
             return
         # source-code users - fire up win32traceutil.py
@@ -268,12 +300,12 @@ def ShowLog(window):
         os.system('start ' + win32api.GetShortPathName(py_name))
 
 def ResetConfig(window):
-    question = "This will reset all configuration options to their default values\r\n\r\n" \
+    question = _("This will reset all configuration options to their default values\r\n\r\n" \
                "It will not reset the folders you have selected, nor your\r\n" \
                "training information, but all other options will be reset\r\n" \
                "and SpamBayes will need to be re-enabled before it will\r\n" \
                "continue filtering.\r\n\r\n" \
-               "Are you sure you wish to reset all options?"
+               "Are you sure you wish to reset all options?")
     flags = win32con.MB_ICONQUESTION | win32con.MB_YESNO | win32con.MB_DEFBUTTON2
     if win32gui.MessageBox(window.hwnd,
                            question, "SpamBayes",flags) == win32con.IDYES:
@@ -304,7 +336,7 @@ class DialogCommand(ButtonProcessor):
 
     def GetPopupHelpText(self, id):
         dd = self.window.manager.dialog_parser.dialogs[self.idd]
-        return "Displays the %s dialog" % dd.caption
+        return _("Displays the %s dialog") % dd.caption
 
 class HiddenDialogCommand(DialogCommand):
     def __init__(self, window, control_ids, idd):
@@ -318,7 +350,7 @@ class HiddenDialogCommand(DialogCommand):
     def OnRButtonUp(self, wparam, lparam):
         self.OnClicked(0)
     def GetPopupHelpText(self, id):
-        return "Nothing to see here."
+        return _("Nothing to see here.")
 
 class ShowWizardCommand(DialogCommand):
     def OnClicked(self, id):
@@ -344,7 +376,7 @@ class ShowWizardCommand(DialogCommand):
         ShowWizard(parent, manager, self.idd, use_existing_config = True)
 
 def WizardFinish(mgr, window):
-    print "Wizard Done!"
+    print _("Wizard Done!")
 
 def WizardTrainer(mgr, config, progress):
     import os, manager, train
@@ -364,9 +396,9 @@ def WizardTrainer(mgr, config, progress):
     rescore = config.training.rescore
 
     if rescore:
-        stages = ("Training", .3), ("Saving", .1), ("Scoring", .6)
+        stages = (_("Training"), .3), (_("Saving"), .1), (_("Scoring"), .6)
     else:
-        stages = ("Training", .9), ("Saving", .1)
+        stages = (_("Training"), .9), (_("Saving"), .1)
     progress.set_stages(stages)
 
     train.real_trainer(classifier_data, config, mgr.message_store, progress)
@@ -391,7 +423,7 @@ def WizardTrainer(mgr, config, progress):
             filter.filterer(mgr, config, progress)
 
         bayes = classifier_data.bayes
-        progress.set_status("Completed training with %d spam and %d good messages" \
+        progress.set_status(_("Completed training with %d spam and %d good messages") \
                             % (bayes.nspam, bayes.nham))
     finally:
         mgr.wizard_classifier_data = classifier_data
@@ -405,6 +437,7 @@ dialog_map = {
         (CloseButtonProcessor,    "IDOK IDCANCEL"),
         (TabProcessor,            "IDC_TAB",
                                   """IDD_GENERAL IDD_FILTER IDD_TRAINING
+                                  IDD_STATISTICS IDD_NOTIFICATIONS
                                   IDD_ADVANCED"""),
         (CommandButtonProcessor,  "IDC_ABOUT_BTN", ShowAbout, ()),
     ),
@@ -428,7 +461,7 @@ dialog_map = {
                                   "Filter_Now.include_sub"),
         (AsyncCommandProcessor,   "IDC_START IDC_PROGRESS IDC_PROGRESS_TEXT",
                                   filter.filterer,
-                                  "Start Filtering", "Stop Filtering",
+                                  _("Start Filtering"), _("Stop Filtering"),
                                   """IDCANCEL IDC_BUT_UNSEEN
                                   IDC_BUT_UNREAD IDC_BROWSE IDC_BUT_ACT_SCORE
                                   IDC_BUT_ACT_ALL"""),
@@ -437,7 +470,8 @@ dialog_map = {
         (FolderIDProcessor,       "IDC_FOLDER_WATCH IDC_BROWSE_WATCH",
                                   "Filter.watch_folder_ids",
                                   "Filter.watch_include_sub"),
-        (ComboProcessor,          "IDC_ACTION_CERTAIN", "Filter.spam_action"),
+        (ComboProcessor,          "IDC_ACTION_CERTAIN", "Filter.spam_action",
+                                  _("Untouched,Moved,Copied")),
         (FolderIDProcessor,       "IDC_FOLDER_CERTAIN IDC_BROWSE_CERTAIN",
                                   "Filter.spam_folder_id"),
         (EditNumberProcessor,     "IDC_EDIT_CERTAIN IDC_SLIDER_CERTAIN",
@@ -447,9 +481,13 @@ dialog_map = {
                                   "Filter.unsure_folder_id"),
         (EditNumberProcessor,     "IDC_EDIT_UNSURE IDC_SLIDER_UNSURE",
                                   "Filter.unsure_threshold"),
-
-        (ComboProcessor,          "IDC_ACTION_UNSURE", "Filter.unsure_action"),
+        (ComboProcessor,          "IDC_ACTION_UNSURE", "Filter.unsure_action",
+                                  _("Untouched,Moved,Copied")),
         (BoolButtonProcessor,     "IDC_MARK_UNSURE_AS_READ",    "Filter.unsure_mark_as_read"),
+        (FolderIDProcessor,       "IDC_FOLDER_HAM IDC_BROWSE_HAM",
+                                  "Filter.ham_folder_id"),
+        (ComboProcessor,          "IDC_ACTION_HAM", "Filter.ham_action",
+                                  _("Untouched,Moved,Copied")),
         ),
     "IDD_TRAINING" : (
         (FolderIDProcessor,       "IDC_STATIC_HAM IDC_BROWSE_HAM",
@@ -461,7 +499,7 @@ dialog_map = {
         (BoolButtonProcessor,     "IDC_BUT_RESCORE",    "Training.rescore"),
         (BoolButtonProcessor,     "IDC_BUT_REBUILD",    "Training.rebuild"),
         (AsyncCommandProcessor,   "IDC_START IDC_PROGRESS IDC_PROGRESS_TEXT",
-                                  train.trainer, "Start Training", "Stop",
+                                  train.trainer, _("Start Training"), _("Stop"),
                                   "IDOK IDCANCEL IDC_BROWSE_HAM IDC_BROWSE_SPAM " \
                                   "IDC_BUT_REBUILD IDC_BUT_RESCORE"),
         (BoolButtonProcessor,     "IDC_BUT_TRAIN_FROM_SPAM_FOLDER",
@@ -469,20 +507,39 @@ dialog_map = {
         (BoolButtonProcessor,     "IDC_BUT_TRAIN_TO_SPAM_FOLDER",
                                   "Training.train_manual_spam"),
         (ComboProcessor,          "IDC_DEL_SPAM_RS", "General.delete_as_spam_message_state",
-         "not change the message,mark the message as read,mark the message as unread"),
+         _("not change the message,mark the message as read,mark the message as unread")),
         (ComboProcessor,          "IDC_RECOVER_RS", "General.recover_from_spam_message_state",
-         "not change the message,mark the message as read,mark the message as unread"),
+         _("not change the message,mark the message as read,mark the message as unread")),
 
     ),
+    "IDD_STATISTICS" : (
+        (StatsProcessor,        "IDC_STATISTICS IDC_BUT_RESET_STATS " \
+                                "IDC_LAST_RESET_DATE"),
+        ),
+    "IDD_NOTIFICATIONS" : (
+        (BoolButtonProcessor,   "IDC_ENABLE_SOUNDS",     "Notification.notify_sound_enabled",
+                                """IDC_HAM_SOUND IDC_BROWSE_HAM_SOUND
+                                   IDC_UNSURE_SOUND IDC_BROWSE_UNSURE_SOUND
+                                   IDC_SPAM_SOUND IDC_BROWSE_SPAM_SOUND
+                                   IDC_ACCUMULATE_DELAY_SLIDER
+                                   IDC_ACCUMULATE_DELAY_TEXT"""),
+        (FilenameProcessor,     "IDC_HAM_SOUND IDC_BROWSE_HAM_SOUND",
+                                "Notification.notify_ham_sound", _("Sound Files (*.wav)|*.wav|All Files (*.*)|*.*")),
+        (FilenameProcessor,     "IDC_UNSURE_SOUND IDC_BROWSE_UNSURE_SOUND",
+                                "Notification.notify_unsure_sound", _("Sound Files (*.wav)|*.wav|All Files (*.*)|*.*")),
+        (FilenameProcessor,     "IDC_SPAM_SOUND IDC_BROWSE_SPAM_SOUND",
+                                "Notification.notify_spam_sound", _("Sound Files (*.wav)|*.wav|All Files (*.*)|*.*")),
+        (EditNumberProcessor,   "IDC_ACCUMULATE_DELAY_TEXT IDC_ACCUMULATE_DELAY_SLIDER",
+                                "Notification.notify_accumulate_delay", 0, 30, 20, 60),
+        ),
     "IDD_ADVANCED" : (
         (BoolButtonProcessor,   "IDC_BUT_TIMER_ENABLED", "Filter.timer_enabled",
                                 """IDC_DELAY1_TEXT IDC_DELAY1_SLIDER
                                    IDC_DELAY2_TEXT IDC_DELAY2_SLIDER
                                    IDC_INBOX_TIMER_ONLY"""),
-        (EditNumberProcessor,   "IDC_DELAY1_TEXT IDC_DELAY1_SLIDER", "Filter.timer_start_delay", 0, 10, 20),
-        (EditNumberProcessor,   "IDC_DELAY2_TEXT IDC_DELAY2_SLIDER", "Filter.timer_interval", 0, 10, 20),
+        (EditNumberProcessor,   "IDC_DELAY1_TEXT IDC_DELAY1_SLIDER", "Filter.timer_start_delay", 0, 10, 20, 60),
+        (EditNumberProcessor,   "IDC_DELAY2_TEXT IDC_DELAY2_SLIDER", "Filter.timer_interval", 0, 10, 20, 60),
         (BoolButtonProcessor,   "IDC_INBOX_TIMER_ONLY", "Filter.timer_only_receive_folders"),
-        (StatsProcessor,        "IDC_STATISTICS"),
         (CommandButtonProcessor,  "IDC_SHOW_DATA_FOLDER", ShowDataFolder, ()),
         (DialogCommand,         "IDC_BUT_SHOW_DIAGNOSTICS", "IDD_DIAGNOSTIC"),
         ),

@@ -3,28 +3,40 @@
 # October, 2002
 # Copyright PSF, license under the PSF license
 
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
+# Action texts could be localized.
+# So comparing the action texts should be done using the same localized text.
+# These variables store the actions texts in the same localized form how the
+# user sees them in the Action dropdowns from configuration dialogs
+ACTION_MOVE, ACTION_COPY, ACTION_NONE = None, None, None
 
 def filter_message(msg, mgr, all_actions=True):
+
     config = mgr.config.filter
     prob = mgr.score(msg)
     prob_perc = prob * 100
     if prob_perc >= config.spam_threshold:
         disposition = "Yes"
         attr_prefix = "spam"
+        if all_actions:
+            msg.c = mgr.bayes_message.PERSISTENT_SPAM_STRING
     elif prob_perc >= config.unsure_threshold:
         disposition = "Unsure"
         attr_prefix = "unsure"
+        if all_actions:
+            msg.c = mgr.bayes_message.PERSISTENT_UNSURE_STRING
     else:
         disposition = "No"
-        attr_prefix = None
+        attr_prefix = "ham"
+        if all_actions:
+            msg.c = mgr.bayes_message.PERSISTENT_HAM_STRING
 
     ms = mgr.message_store
     try:
+        global ACTION_NONE, ACTION_COPY, ACTION_MOVE
+        if ACTION_NONE is None: ACTION_NONE = _("Untouched").lower()
+        if ACTION_COPY is None: ACTION_COPY = _("Copied").lower()
+        if ACTION_MOVE is None: ACTION_MOVE = _("Moved").lower()
+
         try:
             # Save the score
             # Catch msgstore exceptions, as failing to save the score need
@@ -77,9 +89,9 @@ def filter_message(msg, mgr, all_actions=True):
             mark_as_read = getattr(config, attr_prefix + "_mark_as_read")
             if mark_as_read:
                 msg.SetReadState(True)
-            if action.startswith("un"): # untouched
+            if action == ACTION_NONE:
                 mgr.LogDebug(1, "Not touching message '%s'" % msg.subject)
-            elif action.startswith("co"): # copied
+            elif action == ACTION_COPY:
                 try:
                     dest_folder = ms.GetFolder(folder_id)
                 except ms.MsgStoreException:
@@ -89,7 +101,7 @@ def filter_message(msg, mgr, all_actions=True):
                     msg.CopyToReportingError(mgr, dest_folder)
                     mgr.LogDebug(1, "Copied message '%s' to folder '%s'" \
                                  % (msg.subject, dest_folder.GetFQName()))
-            elif action.startswith("mo"): # Moved
+            elif action == ACTION_MOVE:
                 try:
                     dest_folder = ms.GetFolder(folder_id)
                 except ms.MsgStoreException:
@@ -104,6 +116,9 @@ def filter_message(msg, mgr, all_actions=True):
 
         if all_actions:
             mgr.stats.RecordClassification(prob)
+            mgr.classifier_data.message_db.store_msg(msg)
+            mgr.classifier_data.dirty = True
+            mgr.classifier_data.SavePostIncrementalTrain()
         return disposition
     except:
         print "Failed filtering message!", msg
@@ -140,17 +155,17 @@ def filter_folder(f, mgr, config, progress):
 def filterer(mgr, config, progress):
     config = config.filter_now
     if not config.folder_ids:
-        progress.error("You must specify at least one folder")
+        progress.error(_("You must specify at least one folder"))
         return
 
-    progress.set_status("Counting messages")
+    progress.set_status(_("Counting messages"))
     num_msgs = 0
     for f in mgr.message_store.GetFolderGenerator(config.folder_ids, config.include_sub):
         num_msgs += f.count
     progress.set_max_ticks(num_msgs+3)
     dispositions = {}
     for f in mgr.message_store.GetFolderGenerator(config.folder_ids, config.include_sub):
-        progress.set_status("Filtering folder '%s'" % (f.name))
+        progress.set_status(_("Filtering folder '%s'") % (f.name))
         this_dispositions = filter_folder(f, mgr, config, progress)
         for key, val in this_dispositions.items():
             dispositions[key] = dispositions.get(key, 0) + val
@@ -159,10 +174,10 @@ def filterer(mgr, config, progress):
     # All done - report what we did.
     err_text = ""
     if dispositions.has_key("Error"):
-        err_text = " (%d errors)" % dispositions["Error"]
+        err_text = _(" (%d errors)") % dispositions["Error"]
     dget = dispositions.get
-    text = "Found %d spam, %d unsure and %d good messages%s" % \
-                (dget("Yes",0), dget("Unsure",0), dget("No",0), err_text)
+    text = _("Found %d spam, %d unsure and %d good messages%s") % \
+           (dget("Yes",0), dget("Unsure",0), dget("No",0), err_text)
     progress.set_status(text)
 
 def main():

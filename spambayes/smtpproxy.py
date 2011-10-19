@@ -39,19 +39,12 @@ To use, enter the required SMTP server data in your configuration file and
 run sb_server.py
 """
 
-# This module is part of the spambayes project, which is Copyright 2002-3
+# This module is part of the spambayes project, which is Copyright 2002-2007
 # The Python Software Foundation and is covered by the Python Software
 # Foundation license.
 
 __author__ = "Tony Meyer <ta-meyer@ihug.co.nz>"
 __credits__ = "Tim Stone, all the Spambayes folk."
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-
 
 todo = """
  o It would be nice if spam/ham could be bulk forwarded to the proxy,
@@ -119,18 +112,13 @@ Mozilla Mail 1.2.1 Forward (inline, html)                  *1    *
 is set, and if view all headers is true.
 """
 
-import string
 import re
 import socket
-import asyncore
-import asynchat
-import getopt
 import sys
-import os
+import email
 
 from spambayes import Dibbler
-from spambayes import storage
-from spambayes.message import sbheadermessage_from_string
+from spambayes import message
 from spambayes.tokenizer import textparts
 from spambayes.tokenizer import try_to_repair_damaged_base64
 from spambayes.Options import options
@@ -156,7 +144,7 @@ class SMTPProxyBase(Dibbler.BrighterAsyncChat):
         self.args = ''              # ...and its arguments
         self.isClosing = False      # Has the server closed the socket?
         self.inData = False
-        self.data = ""
+        self.data = []
         self.blockData = False
 
         if not self.onIncomingConnection(clientSocket):
@@ -234,11 +222,11 @@ class SMTPProxyBase(Dibbler.BrighterAsyncChat):
             self.args = splitCommand[1:]
 
         if self.inData == True:
-            self.data += self.request + '\r\n'
+            self.data.append(self.request + '\r\n')
             if self.request == ".":
                 self.inData = False
-                cooked = self.onProcessData(self.data)
-                self.data = ""
+                cooked = self.onProcessData("".join(self.data))
+                self.data = []
                 if self.blockData == False:
                     self.serverSocket.push(cooked)
                 else:
@@ -321,8 +309,8 @@ class BayesSMTPProxy(SMTPProxyBase):
         getting FROM: addresses.
         """
         if '<' in address:
-            start = string.index(address, '<') + 1
-            end = string.index(address, '>')
+            start = address.index('<') + 1
+            end = address.index('>')
             return address[start:end]
         else:
             return address
@@ -372,7 +360,7 @@ class BayesSMTPProxy(SMTPProxyBase):
         rv = "%s:%s" % (command, ' '.join(args))
         return rv
 
-    def onUnknown(self, command, args):
+    def onUnknown(self, _command, _args):
         """Default handler."""
         return self.request
 
@@ -384,7 +372,7 @@ class SMTPTrainer(object):
         self.imap = imap
 
     def extractSpambayesID(self, data):
-        msg = sbheadermessage_from_string(data)
+        msg = email.message_from_string(data, _class=message.SBHeaderMessage)
 
         # The nicest MUA is one that forwards the header intact.
         id = msg.get(options["Headers", "mailid_header_name"])
@@ -435,7 +423,7 @@ class SMTPTrainer(object):
                 return
             self.train_cached_message(id, isSpam)
         # Otherwise, train on the forwarded/bounced message.
-        msg = sbheadermessage_from_string(msg)
+        msg = email.message_from_string(msg, _class=message.SBHeaderMessage)
         id = msg.setIdFromPayload()
         msg.delSBHeaders()
         if id is None:
@@ -445,13 +433,13 @@ class SMTPTrainer(object):
             # checksum for the message and use that as an id (this would
             # mean that we didn't need to store the id with the message)
             # but that might be a little unreliable.
-            self.classifier.learn(msg.asTokens(), isSpam)
+            self.classifier.learn(msg.tokenize(), isSpam)
         else:
             if msg.GetTrained() == (not isSpam):
-                self.classifier.unlearn(msg.asTokens(), not isSpam)
+                self.classifier.unlearn(msg.tokenize(), not isSpam)
                 msg.RememberTrained(None)
             if msg.GetTrained() is None:
-                self.classifier.learn(msg.asTokens(), isSpam)
+                self.classifier.learn(msg.tokenize(), isSpam)
                 msg.RememberTrained(isSpam)
 
     def train_cached_message(self, id, isSpam):
@@ -489,12 +477,12 @@ class SMTPTrainer(object):
         if msg.GetTrained() == (not isSpam):
             msg.get_substance()
             msg.delSBHeaders()
-            self.classifier.unlearn(msg.asTokens(), not isSpam)
+            self.classifier.unlearn(msg.tokenize(), not isSpam)
             msg.RememberTrained(None)
         if msg.GetTrained() is None:
             msg.get_substance()
             msg.delSBHeaders()
-            self.classifier.learn(msg.asTokens(), isSpam)
+            self.classifier.learn(msg.tokenize(), isSpam)
             msg.RememberTrained(isSpam)
         self.classifier.store()
         return True

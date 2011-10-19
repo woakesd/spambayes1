@@ -2,17 +2,12 @@
 
 """sb_dbexpimp.py - Bayes database export/import
 
-Classes:
-
-
-Abstract:
-
     This utility has the primary function of exporting and importing
-    a spambayes database into/from a flat file.  This is useful in a number
+    a spambayes database into/from a CSV file.  This is useful in a number
     of scenarios.
 
-    Platform portability of database - flat files can be exported and
-    imported across platforms (winduhs and linux, for example)
+    Platform portability of database - CSV files can be exported and
+    imported across platforms (Windows and Linux, for example).
 
     Database implementation changes - databases can survive database
     implementation upgrades or new database implementations.  For example,
@@ -20,7 +15,7 @@ Abstract:
 
     Database reorganization - an export followed by an import reorgs an
     existing database, <theoretically> improving performance, at least in
-    some database implementations
+    some database implementations.
 
     Database sharing - it is possible to distribute particular databases
     for research purposes, database sharing purposes, or for new users to
@@ -28,17 +23,8 @@ Abstract:
 
     Database merging - multiple databases can be merged into one quite
     easily by specifying -m on an import.  This will add the two database
-    nham and nspams together (assuming the two databases do not share
-    corpora) and for wordinfo conflicts, will add spamcount and hamcount
-    together.
-
-    Spambayes software release migration - an export can be executed before
-    a release upgrade, as part of the installation script.  Then, after the
-    new software is installed, an import can be executed, which will
-    effectively preserve existing training.  This eliminates the need for
-    retraining every time a release is installed.
-
-    Others?  I'm sure I haven't thought of everything...
+    nham and nspams together and for wordinfo conflicts, will add spamcount
+    and hamcount together.
 
 Usage:
     sb_dbexpimp [options]
@@ -46,7 +32,6 @@ Usage:
         options:
             -e     : export
             -i     : import
-            -v     : verbose mode (some additional diagnostic messages)
             -f: FN : flat file to export to or import from
             -p: FN : name of pickled database file to use
             -d: FN : name of dbm database file to use
@@ -60,9 +45,13 @@ Usage:
 
             -h     : help
 
+If neither -p nor -d is specified, then the values in your configuration
+file (or failing that, the defaults) will be used.  In this way, you may
+convert to and from storage formats other than pickle and dbm.
+
 Examples:
 
-    Export pickled mybayes.db into mybayes.db.export as a csv flat file
+    Export pickled mybayes.db into mybayes.db.export as a CSV file
         sb_dbexpimp -e -p mybayes.db -f mybayes.db.export
 
     Import mybayes.db.export into a new DBM mybayes.db
@@ -78,46 +67,21 @@ Examples:
         sb_dbexpimp -e -d bbayes.db -f bbayes.export
         sb_dbexpimp -i -d newbayes.db -f abayes.export
         sb_dbexpimp -i -m -d newbayes.db -f bbayes.export
-
-To Do:
-    o Suggestions?
-
 """
 
-# This module is part of the spambayes project, which is Copyright 2002
+# This module is part of the spambayes project, which is Copyright 2002-2007
 # The Python Software Foundation and is covered by the Python Software
 # Foundation license.
 
-__author__ = "Tim Stone <tim@fourstonesExpressions.com>"
-
 from __future__ import generators
 
-# Python 2.2 compatibility stuff
-try:
-    True, False
-except NameError:
-    True, False = 1, 0
+__author__ = "Tim Stone <tim@fourstonesExpressions.com>"
 
-try:
-    import csv
-    # might get the old object craft csv module - has no reader attr 
-    if not hasattr(csv, "reader"): 
-        raise ImportError 
-except ImportError:
-    import spambayes.compatcsv as csv
-
-try:
-    x = UnicodeDecodeError
-except NameError:
-    UnicodeDecodeError = UnicodeError
-else:
-    del x
-
+import csv
 
 import spambayes.storage
 from spambayes.Options import options
-import sys, os, getopt, errno, re
-import urllib
+import sys, os, getopt, errno
 from types import UnicodeType
 
 def uquote(s):
@@ -152,8 +116,8 @@ def runExport(dbFN, useDBM, outFN):
 
     writer = csv.writer(fp)
 
-    nham = bayes.nham;
-    nspam = bayes.nspam;
+    nham = bayes.nham
+    nspam = bayes.nspam
 
     print "Exporting database %s to file %s" % (dbFN, outFN)
     print "Database has %s ham, %s spam, and %s words" \
@@ -173,16 +137,6 @@ def runImport(dbFN, useDBM, newDBM, inFN):
     if newDBM:
         try:
             os.unlink(dbFN)
-        except OSError:
-            pass
-
-        try:
-            os.unlink(dbFN+".dat")
-        except OSError:
-            pass
-
-        try:
-            os.unlink(dbFN+".dir")
         except OSError:
             pass
 
@@ -240,7 +194,7 @@ if __name__ == '__main__':
     try:
         opts, args = getopt.getopt(sys.argv[1:], 'iehmvd:p:f:o:')
     except getopt.error, msg:
-        print >>sys.stderr, str(msg) + '\n\n' + __doc__
+        print >> sys.stderr, str(msg) + '\n\n' + __doc__
         sys.exit()
 
     useDBM = "pickle"
@@ -252,7 +206,7 @@ if __name__ == '__main__':
 
     for opt, arg in opts:
         if opt == '-h':
-            print >>sys.stderr, __doc__
+            print >> sys.stderr, __doc__
             sys.exit()
         elif opt == '-f':
             flatFN = arg
@@ -262,8 +216,6 @@ if __name__ == '__main__':
             imp = True
         elif opt == '-m':
             newDBM = False
-        elif opt == '-v':
-            options["globals", "verbose"] = True
         elif opt in ('-o', '--option'):
             options.set_from_cmdline(arg, sys.stderr)
     dbFN, useDBM = spambayes.storage.database_type(opts)
@@ -274,4 +226,4 @@ if __name__ == '__main__':
         if imp:
             runImport(dbFN, useDBM, newDBM, flatFN)
     else:
-        print >>sys.stderr, __doc__
+        print >> sys.stderr, __doc__

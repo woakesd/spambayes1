@@ -25,7 +25,7 @@ import email
 import time
 import signal
 import socket
-import email
+import errno
 
 DB_FILE = os.path.expanduser(DB_FILE)
 
@@ -36,13 +36,6 @@ def import_spambayes():
     from spambayes import mboxutils
     from spambayes.cdb_classifier import CdbClassifier
     from spambayes.tokenizer import tokenize
-
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
 
 
 program = sys.argv[0] # For usage(); referenced by docstring above
@@ -65,7 +58,7 @@ def maketmp(dir):
         try:
             fd = os.open(pathname, os.O_WRONLY|os.O_CREAT|os.O_EXCL, 0600)
         except IOError, exc:
-            if exc[i] not in (errno.EINT, errno.EEXIST):
+            if exc[0] not in (errno.EINT, errno.EEXIST):
                 raise
         else:
             break
@@ -142,7 +135,7 @@ def print_message_score(msg_name, msg_fp):
     prob, evidence = bayes.spamprob(tokenize(msg), evidence=True)
     print msg_name, prob
     for word, prob in evidence:
-        print '  ', `word`, prob
+        print '  ', repr(word), prob
 
 def main():
     global DB_FILE, CONFIG_FILE

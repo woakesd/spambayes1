@@ -91,6 +91,17 @@ class ControlDef:
         return t
 
 
+class gt_str(str):
+    """Change a string to a gettext version of itself."""
+    def __repr__(self):
+        if len(self) > 0:
+            # timeit indicates that addition is faster than interpolation
+            # here
+            return "_(" + super(gt_str, self).__repr__() + ")"
+        else:
+            return super(gt_str, self).__repr__() 
+
+
 class RCParser:
     next_id = 1001
     dialogs = {}
@@ -102,6 +113,7 @@ class RCParser:
         self.ids = {"IDOK":1, "IDCANCEL":2, "IDC_STATIC": -1}
         self.names = {1:"IDOK", 2:"IDCANCEL", -1:"IDC_STATIC"}
         self.bitmaps = {}
+        self.gettexted = False
 
     def debug(self, *args):
         if self.debugEnabled:
@@ -126,11 +138,20 @@ class RCParser:
         The "names" member contains the dictionary of name->id
         """
         hFileName = rcFileName[:-2]+"h"
+        if not os.path.exists(hFileName):
+            # Translated dialogs don't need their own copy of dialogs.h,
+            # so look for one in this directory if there isn't one in the
+            # expected place.
+            # This will only work with Python > 2.2 and as source, but
+            # it shouldn't ever be run by binary users, so that shoudln't
+            # matter.
+            hFileName = os.path.join(os.path.dirname(__file__),
+                                     os.path.basename(hFileName))
         try:
             h = open(hFileName, "rU")
             self.parseH(h)
             h.close()
-        except OSError:
+        except IOError:
             print "No .h file. ignoring."
         f = open(rcFileName)
         self.open(f)
@@ -292,7 +313,11 @@ class RCParser:
             self.getToken()
         self.token = self.token[1:-1]
         self.debug("Caption is:",self.token)
-        dlg.caption = self.token
+        if self.gettexted:
+            # gettext captions 
+            dlg.caption = gt_str(self.token)
+        else:
+            dlg.caption = self.token
         self.getToken()
     def dialogFont(self, dlg):
         if "FONT"==self.token:
@@ -312,7 +337,11 @@ class RCParser:
             #print self.token
             self.getToken()
             if self.token[0:1]=='"':
-                control.label = self.token[1:-1]
+                if self.gettexted:
+                    # gettext labels 
+                    control.label = gt_str(self.token[1:-1])
+                else:
+                    control.label = self.token[1:-1]
                 self.getCommaToken()
                 self.getToken()
             elif self.token.isdigit():
@@ -351,8 +380,10 @@ class RCParser:
                 control.style, control.styles = self.styles([], defaultControlStyle)
             #print control.toString()
             dlg.controls.append(control)
-def ParseDialogs(rc_file):
+
+def ParseDialogs(rc_file, gettexted=False):
     rcp = RCParser()
+    rcp.gettexted = gettexted
     try:
         rcp.loadDialogs(rc_file)
     except:

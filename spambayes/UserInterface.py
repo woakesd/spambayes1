@@ -48,7 +48,7 @@ User interface improvements:
 
 """
 
-# This module is part of the spambayes project, which is Copyright 2002
+# This module is part of the spambayes project, which is Copyright 2002-2007
 # The Python Software Foundation and is covered by the Python Software
 # Foundation license.
 
@@ -62,12 +62,6 @@ __author__ = """Richie Hindle <richie@entrian.com>,
                 Tim Stone <tim@fourstonesExpressions.com>"""
 __credits__ = "Tim Peters, Neale Pickett, Tony Meyer, all the Spambayes folk."
 
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-
 import re
 import os
 import sys
@@ -79,16 +73,19 @@ import cgi
 import mailbox
 import types
 import StringIO
+from email.Iterators import typed_subpart_iterator
+from textwrap import wrap
 
-import oe_mailbox
+from spambayes import oe_mailbox
 
-import PyMeldLite
-import Version
-import Dibbler
-import tokenizer
-from spambayes import Stats
+from spambayes import PyMeldLite
+from spambayes import Dibbler
+from spambayes import tokenizer
 from spambayes import Version
-from Options import options, optionsPathname, defaults, OptionsClass
+from spambayes import storage
+from spambayes import FileCorpus
+from spambayes.Options import options, optionsPathname, defaults, \
+     OptionsClass, _
 
 IMAGES = ('helmet', 'status', 'config', 'help',
           'message', 'train', 'classify', 'query')
@@ -103,7 +100,7 @@ experimental_ini_map = (
 for opt in options.options(True):
     sect, opt = opt[1:].split(']', 1)
     if opt[:2].lower() == "x-" and \
-       not options.doc(sect, opt).lower().startswith("(deprecated)"):
+       not options.doc(sect, opt).lower().startswith(_("(deprecated)")):
         experimental_ini_map += ((sect, opt),)
 
 class UserInterfaceServer(Dibbler.HTTPServer):
@@ -111,13 +108,13 @@ class UserInterfaceServer(Dibbler.HTTPServer):
 
     def __init__(self, uiPort):
         Dibbler.HTTPServer.__init__(self, uiPort)
-        print 'User interface url is http://localhost:%d/' % (uiPort)
+        print _('User interface url is http://localhost:%d/') % (uiPort)
 
     def requestAuthenticationMode(self):
         return options["html_ui", "http_authentication"]
 
     def getRealm(self):
-        return "SpamBayes Web Interface"
+        return _("SpamBayes Web Interface")
 
     def isValidUser(self, name, password):
         return (name == options["html_ui", "http_user_name"] and
@@ -128,15 +125,16 @@ class UserInterfaceServer(Dibbler.HTTPServer):
         return options["html_ui", "http_password"]
 
     def getCancelMessage(self):
-        return "You must login to use SpamBayes."""
+        return _("You must login to use SpamBayes.")
 
 
 class BaseUserInterface(Dibbler.HTTPPlugin):
-    def __init__(self):
+    def __init__(self, lang_manager=None):
         Dibbler.HTTPPlugin.__init__(self)
+        self.lang_manager = lang_manager
         htmlSource, self._images = self.readUIResources()
         self.html = PyMeldLite.Meld(htmlSource, readonly=True)
-        self.app_for_version = None
+        self.app_for_version = "SpamBayes"
 
     def onIncomingConnection(self, clientSocket):
         """Checks the security settings."""
@@ -160,7 +158,8 @@ class BaseUserInterface(Dibbler.HTTPPlugin):
         clone = self.html.clone()
         timestamp = time.strftime('%H:%M on %A %B %d %Y', time.localtime())
         clone.footer.timestamp = timestamp
-        clone.footer.version = Version.get_version_string(self.app_for_version)
+        v = Version.get_current_version()
+        clone.footer.version = v.get_long_version(self.app_for_version)
         if help_topic:
             clone.helplink.href = "help?topic=%s" % (help_topic,)
         return clone
@@ -180,9 +179,9 @@ class BaseUserInterface(Dibbler.HTTPPlugin):
         # Add in the name of the page and remove the link to Home if this
         # *is* Home.
         html.title = name
-        if name == 'Home':
+        if name == _('Home'):
             del html.homelink
-            html.pagename = "Home"
+            html.pagename = _("Home")
         elif parent:
             html.pagename = "> <a href='%s'>%s</a> > %s" % \
                             (parent[0], parent[1], name)
@@ -214,7 +213,7 @@ class BaseUserInterface(Dibbler.HTTPPlugin):
 
         try:
             sections = email.Header.decode_header(field)
-        except (binascii.Error, email.Errors.HeaderParseError):
+        except (binascii.Error, email.Errors.HeaderParseError, ValueError):
             sections = [(field, None)]
         field = ' '.join([text for text, unused in sections])
         if len(field) > limit:
@@ -249,10 +248,10 @@ class BaseUserInterface(Dibbler.HTTPPlugin):
 
     def readUIResources(self):
         """Returns ui.html and a dictionary of Gifs."""
-
-        # Using `exec` is nasty, but I couldn't figure out a way of making
-        # `getattr` or `__import__` work with ResourcePackage.
-        from spambayes.resources import ui_html
+        if self.lang_manager:
+            ui_html = self.lang_manager.import_ui_html()
+        else:
+            from spambayes.resources import ui_html
         images = {}
         for baseName in IMAGES:
             moduleName = '%s.%s_gif' % ('spambayes.resources', baseName)
@@ -264,21 +263,27 @@ class BaseUserInterface(Dibbler.HTTPPlugin):
 class UserInterface(BaseUserInterface):
     """Serves the HTML user interface."""
 
-    def __init__(self, bayes, config_parms=(), adv_parms=()):
+    def __init__(self, bayes, config_parms=(), adv_parms=(),
+                 lang_manager=None, stats=None):
         """Load up the necessary resources: ui.html and helmet.gif."""
-        BaseUserInterface.__init__(self)
+        BaseUserInterface.__init__(self, lang_manager)
         self.classifier = bayes
         self.parm_ini_map = config_parms
         self.advanced_options_map = adv_parms
+        self.stats = stats
         self.app_for_version = None # subclasses must fill this in
+        self.previous_sort = None
 
     def onClassify(self, file, text, which):
         """Classify an uploaded or pasted message."""
+        # XXX This doesn't get recorded in the session counts
+        # XXX for messages classified.  That seems right to me (Tony),
+        # XXX but is easily changed if it isn't.
+        self._writePreamble(_("Classify"))
         message = file or text
         message = message.replace('\r\n', '\n').replace('\r', '\n') # For Macs
         results = self._buildCluesTable(message)
         results.classifyAnother = self._buildClassifyBox()
-        self._writePreamble("Classify")
         self.write(results)
         self._writePostamble()
 
@@ -320,11 +325,11 @@ class UserInterface(BaseUserInterface):
             clues = [(tok, None) for tok in tokens]
             probability = self.classifier.spamprob(tokens)
             cluesTable = self._fillCluesTable(clues)
-            head_name = "Tokens"
+            head_name = _("Tokens")
         else:
             (probability, clues) = self.classifier.spamprob(tokens, evidence=True)
             cluesTable = self._fillCluesTable(clues)
-            head_name = "Clues"
+            head_name = _("Clues")
 
         results = self.html.classifyResults.clone()
         results.probability = "%.2f%% (%s)" % (probability*100, probability)
@@ -353,10 +358,10 @@ class UserInterface(BaseUserInterface):
                 cluesTable = self._fillCluesTable(clues)
 
                 if subject is None:
-                    heading = "Original clues: (%s)" % (len(evidence),)
+                    heading = _("Original clues: (%s)") % (len(evidence),)
                 else:
-                    heading = "Original clues for: %s (%s)" % (subject,
-                                                               len(evidence),)
+                    heading = _("Original clues for: %s (%s)") % \
+                              (subject, len(evidence),)
                 orig_results = self._buildBox(heading, 'status.gif',
                                               cluesTable)
                 results.cluesBox += orig_results
@@ -364,7 +369,7 @@ class UserInterface(BaseUserInterface):
             del results.orig_prob
         return results
 
-    def onWordquery(self, word, query_type="basic", max_results='10',
+    def onWordquery(self, word, query_type=_("basic"), max_results='10',
                     ignore_case=False):
         # It would be nice if the default value for max_results here
         # always matched the value in ui.html.
@@ -379,35 +384,35 @@ class UserInterface(BaseUserInterface):
         query = self.html.wordQuery.clone()
         query.word.value = "%s" % (word,)
         for q_type in [query.advanced.basic,
-                               query.advanced.wildcard,
-                               query.advanced.regex]:
+                       query.advanced.wildcard,
+                       query.advanced.regex]:
             if query_type == q_type.id:
                 q_type.checked = 'checked'
-                if query_type != "basic":
+                if query_type != _("basic"):
                     del query.advanced.max_results.disabled
         if ignore_case:
             query.advanced.ignore_case.checked = 'checked'
         query.advanced.max_results.value = str(max_results)
-        queryBox = self._buildBox("Word query", 'query.gif', query)
+        queryBox = self._buildBox(_("Word query"), 'query.gif', query)
         if not options["html_ui", "display_adv_find"]:
             del queryBox.advanced
 
         stats = []
         if word == "":
-            stats.append("You must enter a word.")
-        elif query_type == "basic" and not ignore_case:
+            stats.append(_("You must enter a word."))
+        elif query_type == _("basic") and not ignore_case:
             wordinfo = self.classifier._wordinfoget(word)
             if wordinfo:
                 stat = (word, wordinfo.spamcount, wordinfo.hamcount,
                         self.classifier.probability(wordinfo))
             else:
-                stat = "%r does not exist in the database." % \
+                stat = _("%r does not exist in the database.") % \
                        cgi.escape(word)
             stats.append(stat)
         else:
-            if query_type != "regex":
+            if query_type != _("regex"):
                 word = re.escape(word)
-            if query_type == "wildcard":
+            if query_type == _("wildcard"):
                 word = word.replace("\\?", ".")
                 word = word.replace("\\*", ".*")
 
@@ -430,20 +435,14 @@ class UserInterface(BaseUserInterface):
                                 self.classifier.probability(wordinfo))
                         stats.append(stat)
             if len(stats) == 0 and max_results > 0:
-                stat = "There are no words that begin with '%s' " \
-                        "in the database." % (word,)
+                stat = _("There are no words that begin with '%s' " \
+                         "in the database.") % (word,)
                 stats.append(stat)
             elif reached_limit:
-                if over_limit == 1:
-                    singles = ["was", "match", "is"]
-                else:
-                    singles = ["were", "matches", "are"]
-                stat = "There %s %d additional %s that %s not " \
-                       "shown here." % (singles[0], over_limit,
-                                        singles[1], singles[2])
+                stat = _("Additional tokens not shown: %d") % (over_limit,)
                 stats.append(stat)
 
-        self._writePreamble("Word query")
+        self._writePreamble(_("Word query"))
         if len(stats) == 1:
             if isinstance(stat, types.TupleType):
                 stat = self.html.wordStats.clone()
@@ -454,9 +453,8 @@ class UserInterface(BaseUserInterface):
             else:
                 stat = stats[0]
                 word = original_word
-            row = self._buildBox("Statistics for '%s'" % \
-                                 cgi.escape(word),
-                                 'status.gif', stat)
+            row = self._buildBox(_("Statistics for '%s'") % \
+                                 cgi.escape(word), 'status.gif', stat)
             self.write(row)
         else:
             page = self.html.multiStats.clone()
@@ -472,10 +470,10 @@ class UserInterface(BaseUserInterface):
                     stripe = stripe ^ 1
                     page.multiTable += row
                 else:
-                    self.write(self._buildBox("Statistics for '%s'" % \
+                    self.write(self._buildBox(_("Statistics for '%s'") % \
                                               cgi.escape(original_word),
                                               'status.gif', stat))
-            self.write(self._buildBox("Statistics for '%s'" % \
+            self.write(self._buildBox(_("Statistics for '%s'") % \
                                       cgi.escape(original_word), 'status.gif',
                                       page))
         self.write(queryBox)
@@ -483,11 +481,11 @@ class UserInterface(BaseUserInterface):
 
     def onTrain(self, file, text, which):
         """Train on an uploaded or pasted message."""
-        self._writePreamble("Train")
+        self._writePreamble(_("Train"))
 
         # Upload or paste?  Spam or ham?
         content = file or text
-        isSpam = (which == 'Train as Spam')
+        isSpam = (which == _('Train as Spam'))
 
         # Attempt to convert the content from a DBX file to a standard mbox
         if file:
@@ -496,31 +494,72 @@ class UserInterface(BaseUserInterface):
         # Convert platform-specific line endings into unix-style.
         content = content.replace('\r\n', '\n').replace('\r', '\n')
 
-        # The upload might be a single message or am mbox file.
+        # The upload might be a single message or a dbx/mbox file.
         messages = self._convertUploadToMessageList(content)
 
-        # Append the message(s) to a file, to make it easier to rebuild
-        # the database later.   This is a temporary implementation -
-        # it should keep a Corpus of trained messages.
+        # Add the messages(s) to the appropriate corpus.  This means
+        # that we can rebuild the database later, if desired (as long as
+        # they haven't expired), and can search for the messages later
+        # (and even correct training).  This also takes care of training
+        # the messages.
+        # This replaces the 1.0.x practice of opening a
+        # "_pop3proxyham.mbox" or "_pop3proxyspam.mbox" in the CWD and
+        # placing them there.
         if isSpam:
-            f = open("_pop3proxyspam.mbox", "a")
+            desired_corpus = "spamCorpus"
         else:
-            f = open("_pop3proxyham.mbox", "a")
+            desired_corpus = "hamCorpus"
+        if hasattr(self, desired_corpus):
+            corpus = getattr(self, desired_corpus)
+        else:
+            if hasattr(self, "state"):
+                # sb_server (exists in state)
+                corpus = getattr(self.state, desired_corpus)
+                setattr(self, desired_corpus, corpus)
+                self.msg_name_func = self.state.getNewMessageName
+            else:
+                # sb_imapfilter (need to create)
+                if isSpam:
+                    fn = storage.get_pathname_option("Storage",
+                                                     "spam_cache")
+                else:
+                    fn = storage.get_pathname_option("Storage",
+                                                     "ham_cache")
+                storage.ensureDir(fn)
+                if options["Storage", "cache_use_gzip"]:
+                    factory = FileCorpus.GzipFileMessageFactory()
+                else:
+                    factory = FileCorpus.FileMessageFactory()
+                age = options["Storage", "cache_expiry_days"]*24*60*60
+                corpus = FileCorpus.ExpiryFileCorpus(age, factory, fn,
+                                          '[0123456789\-]*', cacheSize=20)
+                setattr(self, desired_corpus, corpus)
+                # We need a function to create a new name for the message
+                # as sb_imapfilter doesn't have one.
+                class UniqueNamer(object):
+                    count = -1
+                    def generate_name(self):
+                        self.count += 1
+                        return "%10.10d-%d" % (long(time.time()), self.count)
+                Namer = UniqueNamer()
+                self.msg_name_func = Namer.generate_name
 
         # Train on the uploaded message(s).
-        self.write("<b>Training...</b>\n")
+        self.write("<b>" + _("Training") + "...</b>\n")
         self.flush()
         for message in messages:
-            tokens = tokenizer.tokenize(message)
-            self.classifier.learn(tokens, isSpam)
-            f.write("From pop3proxy@spambayes.org Sat Jan 31 00:00:00 2000\n")
-            f.write(message)
-            f.write("\n\n")
+            key = self.msg_name_func()
+            msg = corpus.makeMessage(key, message)
+            msg.setId(key)
+            corpus.addMessage(msg)
+            msg.RememberTrained(isSpam)
+            self.stats.RecordTraining(not isSpam)
 
-        # Save the database and return a link Home and another training form.
-        f.close()
+        # Save the database and return a link Home and another training
+        # form.
         self._doSave()
-        self.write("<p>OK. Return <a href='home'>Home</a> or train again:</p>")
+        self.write(_("%sOK. Return %sHome%s or train again:%s") %
+                   ("<p>", "<a href='home'>", "</a", "</p>"))
         self.write(self._buildTrainBox())
         self._writePostamble()
 
@@ -553,15 +592,15 @@ class UserInterface(BaseUserInterface):
 
     def _doSave(self):
         """Saves the database."""
-        self.write("<b>Saving... ")
+        self.write("<b>" + _("Saving..."))
         self.flush()
         self.classifier.store()
-        self.write("Done</b>.\n")
+        self.write(_("Done.") + "</b>\n")
 
     def onSave(self, how):
         """Command handler for "Save" and "Save & shutdown"."""
         isShutdown = how.lower().find('shutdown') >= 0
-        self._writePreamble("Save", showImage=(not isShutdown))
+        self._writePreamble(_("Save"), showImage=(not isShutdown))
         self._doSave()
         if isShutdown:
             self.write("<p>%s</p>" % self.html.shutdownMessage)
@@ -582,7 +621,7 @@ class UserInterface(BaseUserInterface):
         del form.submit_spam
         del form.submit_ham
         form.action = "classify"
-        return self._buildBox("Classify a message", 'classify.gif', form)
+        return self._buildBox(_("Classify a message"), 'classify.gif', form)
 
     def _buildTrainBox(self):
         """Returns a "Train on a given message" box.  This is used on both
@@ -591,7 +630,7 @@ class UserInterface(BaseUserInterface):
 
         form = self.html.upload.clone()
         del form.submit_classify
-        return self._buildBox("Train on a message, mbox file or dbx file",
+        return self._buildBox(_("Train on a message, mbox file or dbx file"),
                               'message.gif', form)
 
     def reReadOptions(self):
@@ -601,32 +640,32 @@ class UserInterface(BaseUserInterface):
 
     def onExperimentalconfig(self):
         html = self._buildConfigPage(experimental_ini_map)
-        html.title = 'Home &gt; Experimental Configuration'
-        html.pagename = '&gt; Experimental Configuration'
-        html.adv_button.name.value = "Back to basic configuration"
+        html.title = _('Home &gt; Experimental Configuration')
+        html.pagename = _('&gt; Experimental Configuration')
+        html.adv_button.name.value = _("Back to basic configuration")
         html.adv_button.action = "config"
-        html.config_submit.value = "Save experimental options"
-        html.restore.value = "Restore experimental options defaults (all off)"
+        html.config_submit.value = _("Save experimental options")
+        html.restore.value = _("Restore experimental options defaults (all off)")
         del html.exp_button
         self.writeOKHeaders('text/html')
         self.write(html)
 
     def onAdvancedconfig(self):
         html = self._buildConfigPage(self.advanced_options_map)
-        html.title = 'Home &gt; Advanced Configuration'
-        html.pagename = '&gt; Advanced Configuration'
-        html.adv_button.name.value = "Back to basic configuration"
+        html.title = _('Home &gt; Advanced Configuration')
+        html.pagename = _('&gt; Advanced Configuration')
+        html.adv_button.name.value = _("Back to basic configuration")
         html.adv_button.action = "config"
-        html.config_submit.value = "Save advanced options"
-        html.restore.value = "Restore advanced options defaults"
+        html.config_submit.value = _("Save advanced options")
+        html.restore.value = _("Restore advanced options defaults")
         del html.exp_button
         self.writeOKHeaders('text/html')
         self.write(html)
 
     def onConfig(self):
         html = self._buildConfigPage(self.parm_ini_map)
-        html.title = 'Home &gt; Configure'
-        html.pagename = '&gt; Configure'
+        html.title = _('Home &gt; Configure')
+        html.pagename = _('&gt; Configure')
         self.writeOKHeaders('text/html')
         self.write(html)
 
@@ -678,8 +717,22 @@ class UserInterface(BaseUserInterface):
                 continue
             html_key = sect + '_' + opt
 
+            # Annoyingly, we have a special case.  The notate_to and
+            # notate_subject allowed values have to be set to the same
+            # values as the header_x_ options. See also sf #944109.
+            # This code was originally in Options.py, after loading in the
+            # options.  But that doesn't work, because if we are setting
+            # both in a config file, we need it done immediately.
+            # We now need the hack here, *and* in OptionsClass.py
+            if sect == "Headers" and opt in ("notate_to", "notate_subject"):
+                valid_input = (options["Headers", "header_ham_string"],
+                               options["Headers", "header_spam_string"],
+                               options["Headers", "header_unsure_string"])
+            else:
+                valid_input = options.valid_input(sect, opt)
+
             # Populate the rows with the details and add them to the table.
-            if type(options.valid_input(sect, opt)) in types.StringTypes:
+            if isinstance(valid_input, types.StringTypes):
                 # we provide a text input
                 newConfigRow1 = configTextRow1.clone()
                 newConfigRow1.label = options.display_name(sect, opt)
@@ -692,7 +745,7 @@ class UserInterface(BaseUserInterface):
                 blankOption = newConfigRow1.input.clone()
                 firstOpt = True
                 i = 0
-                for val in options.valid_input(sect, opt):
+                for val in valid_input:
                     newOption = blankOption.clone()
                     if options.multiple_values_allowed(sect, opt):
                         if val in options[sect, opt]:
@@ -737,9 +790,9 @@ class UserInterface(BaseUserInterface):
             # Tim thinks that Yes/No makes more sense than True/False
             if options.is_boolean(sect, opt):
                 if currentValue == "False":
-                    currentValue = "No"
+                    currentValue = _("No")
                 elif currentValue == "True":
-                    currentValue = "Yes"
+                    currentValue = _("Yes")
             # XXX Something needs to be done here, otherwise really
             # XXX long options squeeze the help text too far to the
             # XXX right.  Browsers can't wrap the text (even if
@@ -759,10 +812,12 @@ class UserInterface(BaseUserInterface):
     def onChangeopts(self, **parms):
         pmap = self.parm_ini_map
         if parms.has_key("how"):
-            if parms["how"] == "Save advanced options":
+            if parms["how"] == _("Save advanced options"):
                 pmap = self.advanced_options_map
-            elif parms["how"] == "Save experimental options":
+            elif parms["how"] == _("Save experimental options"):
                 pmap = experimental_ini_map
+            elif parms["how"] == _("Save plugin options"):
+                pmap = self.plugin_ini_map
             del parms["how"]
         html = self._getHTMLClone()
         html.shutdownTableCell = "&nbsp;"
@@ -770,13 +825,16 @@ class UserInterface(BaseUserInterface):
         errmsg = self.verifyInput(parms, pmap)
 
         if errmsg != '':
-            html.mainContent.heading = "Errors Detected"
+            html.mainContent.heading = _("Errors Detected")
             html.mainContent.boxContent = errmsg
-            html.title = 'Home &gt; Error'
-            html.pagename = '&gt; Error'
+            html.title = _('Home &gt; Error')
+            html.pagename = _('&gt; Error')
             self.writeOKHeaders('text/html')
             self.write(html)
             return
+
+        old_database_type = options["Storage", "persistent_use_database"]
+        old_name = options["Storage", "persistent_storage_file"]
 
         for name, value in parms.items():
             sect, opt = name.split('_', 1)
@@ -790,20 +848,52 @@ class UserInterface(BaseUserInterface):
                 options.set(sect, opt, value)
 
         options.update_file(optionsPathname)
+
+        # If the database type changed, then convert it for them.
+        if options["Storage", "persistent_use_database"] != \
+           old_database_type and os.path.exists(old_name):
+            new_name = options["Storage", "persistent_storage_file"]
+            new_type = options["Storage", "persistent_use_database"]
+            self.close_database()
+            try:
+                os.remove(new_name + ".tmp")
+            except OSError:
+                pass
+            storage.convert(old_name, old_database_type,
+                            new_name + ".tmp", new_type)
+            if os.path.exists(new_name):
+                try:
+                    os.remove(new_name + ".old")
+                except OSError:
+                    pass
+                os.rename(new_name, new_name + ".old")
+            os.rename(new_name + ".tmp", new_name)
+            # Messageinfo db is not converted.
+            if os.path.exists(options["Storage",
+                                      "messageinfo_storage_file"]):
+                try:
+                    os.remove(options["Storage",
+                                      "messageinfo_storage_file"] + ".old")
+                except OSError:
+                    pass
+                os.rename(options["Storage", "messageinfo_storage_file"],
+                          options["Storage",
+                                  "messageinfo_storage_file"] + ".old")
+            
         self.reReadOptions()
 
-        html.mainContent.heading = "Options Changed"
-        html.mainContent.boxContent = "%s.  Return <a href='home'>Home</a>." \
-                                      % "Options changed"
-        html.title = 'Home &gt; Options Changed'
-        html.pagename = '&gt; Options Changed'
+        html.mainContent.heading = _("Options Changed")
+        html.mainContent.boxContent = _("Options changed.  Return " \
+                                        "<a href='home'>Home</a>.")
+        html.title = _('Home &gt; Options Changed')
+        html.pagename = _('&gt; Options Changed')
         self.writeOKHeaders('text/html')
         self.write(html)
 
     def onRestoredefaults(self, how):
-        if how == "Restore advanced options defaults":
+        if how == _("Restore advanced options defaults"):
             self.restoreConfigDefaults(self.advanced_options_map)
-        elif how == "Restore experimental options defaults (all off)":
+        elif how == _("Restore experimental options defaults (all off)"):
             self.restoreConfigDefaults(experimental_ini_map)
         else:
             self.restoreConfigDefaults(self.parm_ini_map)
@@ -812,11 +902,11 @@ class UserInterface(BaseUserInterface):
         html = self._getHTMLClone()
         html.shutdownTableCell = "&nbsp;"
         html.mainContent = self.html.headedBox.clone()
-        html.mainContent.heading = "Option Defaults Restored"
-        html.mainContent.boxContent = "%s.  Return <a href='home'>Home</a>." \
-                                      % "Defaults restored"
-        html.title = 'Home &gt; Defaults Restored'
-        html.pagename = '&gt; Defaults Restored'
+        html.mainContent.heading = _("Option Defaults Restored")
+        html.mainContent.boxContent = _("Defaults restored.  Return " \
+                                        "<a href='home'>Home</a>.")
+        html.title = _('Home &gt; Defaults Restored')
+        html.pagename = _('&gt; Defaults Restored')
         self.writeOKHeaders('text/html')
         self.write(html)
         self.reReadOptions()
@@ -842,6 +932,21 @@ class UserInterface(BaseUserInterface):
             if opt is None:
                 nice_section_name = sect
                 continue
+
+            # Annoyingly, we have a special case.  The notate_to and
+            # notate_subject allowed values have to be set to the same
+            # values as the header_x_ options. See also sf #944109.
+            # This code was originally in Options.py, after loading in the
+            # options.  But that doesn't work, because if we are setting
+            # both in a config file, we need it done immediately.
+            # We now need the hack here, *and* in OptionsClass.py
+            if sect == "Headers" and opt in ("notate_to", "notate_subject"):
+                valid_input = (options["Headers", "header_ham_string"],
+                               options["Headers", "header_spam_string"],
+                               options["Headers", "header_unsure_string"])
+            else:
+                valid_input = options.valid_input(sect, opt)
+
             html_key = sect + '_' + opt
             if not parms.has_key(html_key):
                 # This is a set of checkboxes where none are selected
@@ -852,21 +957,21 @@ class UserInterface(BaseUserInterface):
                 entered_value = value
                 # Tim thinks that Yes/No makes more sense than True/False
                 if options.is_boolean(sect, opt):
-                    if value == "No":
+                    if value == _("No"):
                         value = False
-                    elif value == "Yes":
+                    elif value == _("Yes"):
                         value = True
                 if options.multiple_values_allowed(sect, opt) and \
                    value == "":
                     value = ()
                 value = options.convert(sect, opt, value)
             if not options.is_valid(sect, opt, value):
-                errmsg += '<li>\'%s\' is not a value valid for [%s] %s' % \
+                errmsg += _('<li>\'%s\' is not a value valid for [%s] %s') % \
                           (entered_value, nice_section_name,
                            options.display_name(sect, opt))
-                if type(options.valid_input(sect, opt)) == type((0,1)):
-                    errmsg += '. Valid values are: '
-                    for valid in options.valid_input(sect, opt):
+                if isinstance(valid_input, types.TupleType):
+                    errmsg += _('. Valid values are: ')
+                    for valid in valid_input:
                         errmsg += str(valid) + ','
                     errmsg = errmsg[:-1] # cut last ','
                 errmsg += '</li>'
@@ -885,138 +990,38 @@ class UserInterface(BaseUserInterface):
         for section, option in parm_map:
             if option is not None:
                 if not options.no_restore(section, option):
-                    options.set(section, option, d.get(section,option))
+                    options.set(section, option, d.get(section, option))
 
         options.update_file(optionsPathname)
 
     def onHelp(self, topic=None):
         """Provide a help page, either the default if topic is not
         supplied, or specific to the topic given."""
-        self._writePreamble("Help")
+        self._writePreamble(_("Help"))
         helppage = self.html.helppage.clone()
         if topic:
-            # Present help specific to a certain page.  We probably want to
-            # load this from a file, rather than fill up UserInterface.py,
-            # but for demonstration purposes, do this for now.
-            # (Note that this, of course, should be in ProxyUI, not here.)
-            if topic == "review":
-                helppage.helpheader = "Review Page Help"
-                helppage.helptext = """<p>When you first start using
-SpamBayes, all your mail will be classified as 'unsure' because SpamBayes
-doesn't have any preconceived ideas about what good or bad mail looks like.
-As soon as you start training the classification will improve, and by the
-time you've classified even 20 messages of each you'll be seeing quite
-reasonable results.</p>
-
-<p>SpamBayes saves a <strong>temporary copy</strong> of all incoming mail
-so that classification can be independant of whatever mail client you are
-using. You need to run through these messages and tell SpamBayes how to
-handle mail like that in the future. This page lists messages that have
-arrived in the last %s days and that have not yet been trained. For each
-message listed, you need to choose to either <strong>discard</strong>
-(don't train on this message), <strong>defer</strong> (leave training on
-this message until later), or train (as either good -
-<strong>ham</strong>), or bad - <strong>spam</strong>). You do this by
-simply clicking in the circle in the appropriate column; if you wish to
-change all the messages to the same action, you can simply click the column
-heading.</p>
-
-<p>You are presented with the subject and sender of each message, but, if
-this isn't enough information for you to make a decision on the message,
-you can also view the message text (this is the raw text, so you can't do
-any damage if the message contains a virus or any other malignant data).
-To do this, simply click on the subject of the message.</p>
-
-<p>Once you have chosen the actions you wish to perform on all the
-displayed messages, click the <em>Train</em> button at the end of the page.
-SpamBayes will then update its database to reflect this data.</p>
-
-<p>Note that the messages are split up into the classification that
-SpamBayes would place the message with current training data (if this is
-correct, you might choose to <em>Discard</em> the message, rather than
-train on it - see the <a href="http://entrian.com/sbwiki">SpamBayes wiki
-</a> for discussion of training techniques).  You can also see the
-<em>Tokens</em> that the message contains (the words in the message,
-plus some additional tokens that SpamBayes generates) and the <em>Clues
-</em> that SpamBayes used in classifying the message (not all tokens are
-used in classification).</p>
-
-<p>So that the page isn't overwhelmingly long, messages waiting for review
-are split by the day they arrived.  You can use the <em>Previous Day</em>
-or <em>Next Day</em> buttons at the top of the page to move between days.
-If mail arrives while the review page is open the new messages will
-<strong>not</strong> be automatically added to the displayed list; to add
-the new message, click the <em>Refresh</em> button at the top of the page.
-</p><hr />""" % (options["Storage", "cache_expiry_days"],)
-            elif topic == "stats":
-                # This does belong with UserInterface.py, but should
-                # still probably be loaded from a file or something to
-                # avoid all this clutter.  Someone come up with the
-                # best solution! (A pickle?  A single text file? A text
-                # file per help page in a directory?)
-                helppage.helpheader = "Statistics Page Help"
-                helppage.helptext = """<p>SpamBayes keeps track of certain
-information about the messages that are classified.  For your interest,
-this page displays statistics about the messages that have been classified
-and trained so far.</p>
-
-<p>Currently the page displays information about the
-number of messages that have been classified as good, bad and unsure, how
-many of these were false negatives or positives, and how many messages
-were classified as unsure (and what their correct classification was).</p>
-
-<p>Note that the data for this page resides in the &quot;message info&quot;
-database that SpamBayes uses, and so only reflects messages since the
-last time this database was created.</p><hr />"""
-            elif topic == "home_proxy":
-                # Also belongs with UserInterface.py, and probably
-                # not with the source!
-                helppage.helpheader = "Home Page Help"
-                helppage.helptext = """<p>This is the main page for the
-SpamBayes web interface.  You are presented with some information about
-the current status of SpamBayes, and can follow links to review messages
-or alter your configuration.</p>
-
-<p>If you have messages stored in a mbox or dbx (Outlook Express) file
-that you wish to 'bulk' train, or if you wish to train on a message
-that you type in, you can do this on this page.  Click the
-&quot;Browse&quot; button (or paste the text in, including headers),
-and then click the <em>Train as Ham</em> or <em>Train as Spam</em>
-button.</p>
-
-<p>Likewise, if you have a message that you wish to classify, you
-can do this.  Either paste the message into the text box, or click
-&quot;Browse&quot; and locate the text file that the message is
-located in.  Click <em>Classify</em>, and you will be taken to a
-page describing the classification of that message.</p>
-
-<p>If you want to find out information about a word in the statistics
-database that forms the heart of SpamBayes, you can use the &quot;Word
-Query&quot; facility.  Enter in the word that you wish to search for
-and click <em>Tell me about this word</em>.  If you enable the advanced
-find query, you can also search using wildcards or regular expressions.</p>
-
-<p>You can also search for a specific message in the cache of temporary
-copies of messages that have been proxied.  You might wish to do this if
-you realise that you have incorrectly trained a message and need to correct
-the training.  You can search the subject, headers, or message body, or
-for the SpamBayes ID (which is in the headers of messages that SpamBayes
-proxies).  Messages that are found will be presented in the standard
-review page.  Note that once messages expire from the cache (after %s
-days), you can no longer find them.</p>
-<hr />""" % (options["Storage", "cache_expiry_days"],)
+            # Present help specific to a certain page.
+            headerelem_name = "helpheader_" + topic
+            textelem_name = "helptext_" + topic
+            try:
+                helppage.helpheader = self.html[headerelem_name]._content
+                helppage.helptext = self.html[textelem_name]._content % \
+                    { "cache_expiry_days": options["Storage", "cache_expiry_days"] }
+            except KeyError:
+                pass
         self.write(helppage)
         self._writePostamble()
 
     def onStats(self):
         """Provide statistics about previous SpamBayes activity."""
-        # Caching this information somewhere would be a good idea,
-        # rather than regenerating it every time.  If people complain
-        # about it being too slow, then do this!
-        s = Stats.Stats()
-        self._writePreamble("Statistics")
-        stats = s.GetStats()
-        stats = self._buildBox("Statistics", None, "<br/><br/>".join(stats))
+        self._writePreamble(_("Statistics"))
+        if self.stats:
+            stats = self.stats.GetStats(use_html=True)
+            stats = self._buildBox(_("Statistics"), None,
+                                   "<br/><br/>".join(stats))
+        else:
+            stats = self._buildBox(_("Statistics"), None,
+                                   _("Statistics not available"))
         self.write(stats)
         self._writePostamble(help_topic="stats")
 
@@ -1024,10 +1029,11 @@ days), you can no longer find them.</p>
         """Create a message to post to spambayes@python.org that hopefully
         has enough information for us to help this person with their
         problem."""
-        self._writePreamble("Send Help Message", ("help", "Help"))
+        self._writePreamble(_("Send Help Message"), ("help", _("Help")))
         report = self.html.bugreport.clone()
         # Prefill the report
-        sb_ver = Version.get_version_string(self.app_for_version)
+        v = Version.get_current_version()
+        sb_ver = v.get_long_version(self.app_for_version)
         if hasattr(sys, "frozen"):
             sb_type = "binary"
         else:
@@ -1048,7 +1054,7 @@ days), you can no longer find them.</p>
         remote_servers = options["pop3proxy", "remote_servers"]
         if remote_servers:
             domain_guess = remote_servers[0]
-            for pre in ["pop.", "pop3.", "mail.",]:
+            for pre in ["pop.", "pop3.", "mail."]:
                 if domain_guess.startswith(pre):
                     domain_guess = domain_guess[len(pre):]
         else:
@@ -1064,7 +1070,7 @@ days), you can no longer find them.</p>
         else:
             if hasattr(sys, "frozen"):
                 temp_dir = win32api.GetTempPath()
-                for name in ["SpamBayesService", "SpamBayesServer",]:
+                for name in ["SpamBayesService", "SpamBayesServer"]:
                     for i in xrange(3):
                         pn = os.path.join(temp_dir, "%s%d.log" % (name,
                                                                   (i+1)))
@@ -1085,13 +1091,13 @@ days), you can no longer find them.</p>
             except IndexError:
                 smtp_server = None
             if not smtp_server:
-                self.write(self._buildBox("Warning", "status.gif",
-                           "You will be unable to send this message from " \
+                self.write(self._buildBox(_("Warning"), "status.gif",
+                           _("You will be unable to send this message from " \
                            "this page, as you do not have your SMTP " \
                            "server's details entered in your configuration. " \
                            "Please either <a href='config'>enter those " \
                            "details</a>, or copy the text below into your " \
-                           "regular mail application."))
+                           "regular mail application.")))
                 del report.submitrow
 
         self.write(report)
@@ -1110,13 +1116,13 @@ days), you can no longer find them.</p>
         from email.MIMEText import MIMEText
 
         if not self._verifyEnteredDetails(from_addr, subject, message):
-            self._writePreamble("Error", ("help", "Help"))
-            self.write(self._buildBox("Error", "status.gif",
-                                      "You must fill in the details that " \
+            self._writePreamble(_("Error"), ("help", _("Help")))
+            self.write(self._buildBox(_("Error"), "status.gif",
+                                      _("You must fill in the details that " \
                                       "describe your specific problem " \
-                                      "before you can send the message."))
+                                      "before you can send the message.")))
         else:
-            self._writePreamble("Sent", ("help", "Help"))
+            self._writePreamble(_("Sent"), ("help", _("Help")))
             mailer = smtplib.SMTP(options["smtpproxy", "remote_servers"][0])
 
             # Create the enclosing (outer) message
@@ -1129,8 +1135,9 @@ days), you can no longer find them.</p>
             # even if they're not subscribed to the list.
             outer['CC'] = from_addr
             outer['From'] = from_addr
-            outer['X-Mailer'] = Version.get_version_string(self.app_for_version)
-            outer.preamble = self._wrap(message)
+            v = Version.get_current_version()
+            outer['X-Mailer'] = v.get_long_version(self.app_for_version)
+            outer.preamble = wrap(message)
             # To guarantee the message ends with a newline
             outer.epilogue = ''
 
@@ -1170,7 +1177,7 @@ days), you can no longer find them.</p>
                 msg.add_header('Content-Disposition', 'attachment',
                                filename=os.path.basename(attach))
                 outer.attach(msg)
-            msg = MIMEText(self._wrap(message))
+            msg = MIMEText(wrap(message))
             outer.attach(msg)
 
             recips = []
@@ -1181,41 +1188,20 @@ days), you can no longer find them.</p>
                 if r:
                     recips.append(r)
             mailer.sendmail(from_addr, recips, outer.as_string())
-            self.write("Sent message.  Please do not send again, or " \
-                       "refresh this page!")
+            self.write(_("Sent message.  Please do not send again, or " \
+                       "refresh this page!"))
         self._writePostamble()
 
     def _verifyEnteredDetails(self, from_addr, subject, message):
         """Ensure that the user didn't just send the form message, and
         at least changed the fields."""
-        if from_addr.startswith("[YOUR EMAIL ADDRESS]"):
+        if from_addr.startswith(_("[YOUR EMAIL ADDRESS]")):
             return False
-        if message.endswith("[DESCRIBE YOUR PROBLEM HERE]"):
+        if message.endswith(_("[DESCRIBE YOUR PROBLEM HERE]")):
             return False
-        if subject.endswith("[PROBLEM SUMMARY]"):
+        if subject.endswith(_("[PROBLEM SUMMARY]")):
             return False
         return True
-
-    def _wrap(self, text, width=70):
-        """Wrap the text into lines no bigger than the specified width."""
-        try:
-            from textwrap import fill
-        except ImportError:
-            pass
-        else:
-            return "\n".join([fill(paragraph, width) \
-                              for paragraph in text.split('\n')])
-        # No textwrap module, so do the same stuff (more-or-less) ourselves.
-        def fill(text, width):
-            if len(text) <= width:
-                return text
-            wordsep_re = re.compile(r'(-*\w{2,}-(?=\w{2,})|'   # hyphenated words
-                                    r'(?<=\S)-{2,}(?=\w))')    # em-dash
-            chunks = wordsep_re.split(text)
-            chunks = filter(None, chunks)
-            return '\n'.join(self._wrap_chunks(chunks, width))
-        return "\n".join([fill(paragraph, width) \
-                          for paragraph in text.split('\n')])
 
     def _wrap_chunks(self, chunks, width):
         """Stolen from textwrap; see that module in Python >= 2.3 for
@@ -1242,3 +1228,195 @@ days), you can no longer find them.</p>
             if cur_line:
                 lines.append(''.join(cur_line))
         return lines
+
+    def _keyToTimestamp(self, key):
+        """Given a message key (as seen in a Corpus), returns the timestamp
+        for that message.  This is the time that the message was received,
+        not the Date header."""
+        return long(key[:10])
+
+    def _getTimeRange(self, timestamp):
+        """Given a unix timestamp, returns a 3-tuple: the start timestamp
+        of the given day, the end timestamp of the given day, and the
+        formatted date of the given day."""
+        this = time.localtime(timestamp)
+        start = (this[0], this[1], this[2], 0, 0, 0, this[6], this[7], this[8])
+        end = time.localtime(time.mktime(start) + 36*60*60)
+        end = (end[0], end[1], end[2], 0, 0, 0, end[6], end[7], end[8])
+        date = time.strftime("%A, %B %d, %Y", start)
+        return time.mktime(start), time.mktime(end), date
+
+    def _sortMessages(self, messages, sort_order, reverse=False):
+        """Sorts the message by the appropriate attribute.  If this was the
+        previous sort order, then reverse it."""
+        if sort_order is None or sort_order == "received":
+            # Default sorting, which is in reverse order of appearance.
+            # This is complicated because the 'received' info is the key.
+            messages.sort()
+            if self.previous_sort == sort_order:
+                messages.reverse()
+                self.previous_sort = None
+            else:
+                self.previous_sort = 'received'
+            return messages
+        tmplist = [(getattr(x[1], sort_order), x) for x in messages]
+        tmplist.sort()
+        if reverse:
+            tmplist.reverse()
+        return [x for (key, x) in tmplist]
+
+    def _appendMessages(self, table, keyedMessageInfo, label, sort_order,
+                        reverse=False):
+        """Appends the rows of a table of messages to 'table'."""
+        stripe = 0
+
+        keyedMessageInfo = self._sortMessages(keyedMessageInfo, sort_order,
+                                              reverse)
+        nrows = options["html_ui", "rows_per_section"]
+        for key, messageInfo in keyedMessageInfo[:nrows]:
+            unused, unused, messageInfo.received = \
+                    self._getTimeRange(self._keyToTimestamp(key))
+            row = self.html.reviewRow.clone()
+            try:
+                score = messageInfo.score
+            except ValueError:
+                score = None
+            if label == _('Spam'):
+                if score is not None \
+                   and score > options["html_ui", "spam_discard_level"]:
+                    r_att = getattr(row, 'discard')
+                else:
+                    r_att = getattr(row, options["html_ui",
+                                           "default_spam_action"])
+            elif label == _('Ham'):
+                if score is not None \
+                   and score < options["html_ui", "ham_discard_level"]:
+                    r_att = getattr(row, 'discard')
+                else:
+                    r_att = getattr(row, options["html_ui",
+                                           "default_ham_action"])
+            else:
+                r_att = getattr(row, options["html_ui",
+                                           "default_unsure_action"])
+            setattr(r_att, "checked", 1)
+
+            row.optionalHeadersValues = '' # make way for real list
+            for header in options["html_ui", "display_headers"]:
+                header = header.lower()
+                text = getattr(messageInfo, "%sHeader" % (header,))
+                if header == "subject":
+                    # Subject is special, because it links to the body.
+                    # If the user doesn't display the subject, then there
+                    # is no link to the body.
+                    h = self.html.reviewRow.linkedHeaderValue.clone()
+                    h.text.title = messageInfo.bodySummary
+                    h.text.href = "view?key=%s&corpus=%s" % (key, label)
+                else:
+                    h = self.html.reviewRow.headerValue.clone()
+                h.text = text
+                row.optionalHeadersValues += h
+
+            # Apart from any message headers, we may also wish to display
+            # the message score, and the time the message was received.
+            if options["html_ui", "display_score"]:
+                if isinstance(messageInfo.score, types.StringTypes):
+                    # Presumably either "?" or "Err".
+                    row.score_ = messageInfo.score
+                else:
+                    row.score_ = "%.2f%%" % (messageInfo.score,)
+            else:
+                del row.score_
+            if options["html_ui", "display_received_time"]:
+                row.received_ = messageInfo.received
+            else:
+                del row.received_
+
+            # Many characters can't go in the URL or they cause problems
+            # (&, ;, ?, etc).  So we use the hex values for them all.
+            subj_list = []
+            for c in messageInfo.subjectHeader:
+                subj_list.append("%%%s" % (hex(ord(c))[2:],))
+            subj = "".join(subj_list)
+            row.classify.href = "showclues?key=%s&subject=%s" % (key, subj)
+            row.tokens.href = ("showclues?key=%s&subject=%s&tokens=1" %
+                               (key, subj))
+            setattr(row, 'class', ['stripe_on', 'stripe_off'][stripe]) # Grr!
+            setattr(row, 'onMouseOut',
+                    ["this.className='stripe_on';",
+                     "this.className='stripe_off';"][stripe])
+            row = str(row).replace('TYPE', label).replace('KEY', key)
+            table += row
+            stripe = stripe ^ 1
+
+    def _contains(self, a, b, ignore_case=False):
+        """Return true if substring b is part of string a."""
+        assert isinstance(a, types.StringTypes)
+        assert isinstance(b, types.StringTypes)
+        if ignore_case:
+            a = a.lower()
+            b = b.lower()
+        return a.find(b) >= 0
+
+    def _makeMessageInfo(self, message):
+        """Given an email.Message, return an object with subjectHeader,
+        bodySummary and other header (as needed) attributes.  These objects
+        are passed into appendMessages by onReview - passing email.Message
+        objects directly uses too much memory.
+        """
+        # Remove notations before displaying - see:
+        # [ 848365 ] Remove subject annotations from message review page
+        message.delNotations()
+        subjectHeader = message["Subject"] or "(none)"
+        headers = {"subject" : subjectHeader}
+        for header in options["html_ui", "display_headers"]:
+            headers[header.lower()] = (message[header] or "(none)")
+        score = message[options["Headers", "score_header_name"]]
+        if score:
+            # the score might have the log info at the end
+            op = score.find('(')
+            if op >= 0:
+                score = score[:op]
+            try:
+                score = float(score) * 100
+            except ValueError:
+                # Hmm.  The score header should only contain a floating
+                # point number.  What's going on here, then?
+                score = "Err"  # Let the user know something is wrong.
+        else:
+            # If the lookup fails, this means that the "include_score"
+            # option isn't activated. We have the choice here to either
+            # calculate it now, which is pretty inefficient, since we have
+            # already done so, or to admit that we don't know what it is.
+            # We'll go with the latter.
+            score = "?"
+        try:
+            part = typed_subpart_iterator(message, 'text', 'plain').next()
+            text = part.get_payload()
+        except StopIteration:
+            try:
+                part = typed_subpart_iterator(message, 'text', 'html').next()
+                text = part.get_payload()
+                text, unused = tokenizer.crack_html_style(text)
+                text, unused = tokenizer.crack_html_comment(text)
+                text = tokenizer.html_re.sub(' ', text)
+                text = _('(this message only has an HTML body)\n') + text
+            except StopIteration:
+                text = _('(this message has no text body)')
+        if type(text) == type([]):  # gotta be a 'right' way to do this
+            text = _("(this message is a digest of %s messages)") % (len(text))
+        elif text is None:
+            text = _("(this message has no body)")
+        else:
+            text = text.replace('&nbsp;', ' ')      # Else they'll be quoted
+            text = re.sub(r'(\s)\s+', r'\1', text)  # Eg. multiple blank lines
+            text = text.strip()
+
+        class _MessageInfo:
+            pass
+        messageInfo = _MessageInfo()
+        for headerName, headerValue in headers.items():
+            headerValue = self._trimHeader(headerValue, 45, True)
+            setattr(messageInfo, "%sHeader" % (headerName,), headerValue)
+        messageInfo.score = score
+        messageInfo.bodySummary = self._trimHeader(text, 200)
+        return messageInfo

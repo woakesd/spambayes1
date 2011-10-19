@@ -48,7 +48,7 @@ To Do:
 
 """
 
-# This module is part of the spambayes project, which is Copyright 2002-3
+# This module is part of the spambayes project, which is Copyright 2002-2007
 # The Python Software Foundation and is covered by the Python Software
 # Foundation license.
 
@@ -88,14 +88,7 @@ except ImportError:
 import re
 import types
 import locale
-
-try:
-    True, False, bool
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-    def bool(val):
-        return not not val
+from textwrap import wrap
 
 __all__ = ['OptionsClass',
            'HEADER_NAME', 'HEADER_VALUE',
@@ -104,6 +97,7 @@ __all__ = ['OptionsClass',
            'PATH', 'VARIABLE_PATH', 'FILE', 'FILE_WITH_PATH',
            'IMAP_FOLDER', 'IMAP_ASTRING',
            'RESTORE', 'DO_NOT_RESTORE', 'IP_LIST',
+           'OCRAD_CHARSET',
           ]
 
 MultiContainerTypes = (types.TupleType, types.ListType)
@@ -207,17 +201,17 @@ class Option(object):
             raise
         s = str(value)
         i = 0
-        vals = ()
+        vals = []
         while True:
             m = r.search(s[i:])
             if m is None:
                 break
-            vals += (m.group(),)
+            vals.append(m.group())
             delimiter = s[i:i + m.start()]
             if self.delimiter is None and delimiter != "":
                 self.delimiter = delimiter
             i += m.end()
-        return vals
+        return tuple(vals)
 
     def as_nice_string(self, section=None):
         '''Summarise the option in a user-readable format.'''
@@ -233,6 +227,26 @@ class Option(object):
                      str(self.multiple_values_allowed()))
         strval += "\"%s\"\n\n" % (str(self.doc()))
         return strval
+
+    def as_documentation_string(self, section=None):
+        '''Summarise the option in a format suitable for unmodified
+        insertion in HTML documentation.'''
+        strval = ["<tr>"]
+        if section is not None:
+            strval.append("\t<td>[%s]</td>" % (section,))
+        strval.append("\t<td>%s</td>" % (self.name,))
+        strval.append("\t<td>%s</td>" % \
+                      ", ".join([str(s) for s in self.valid_input()]))
+        default = self.default()
+        if isinstance(default, types.TupleType):
+            default = ", ".join([str(s) for s in default])
+        else:
+            default = str(default)
+        strval.append("\t<td>%s</td>" % (default,))
+        strval.append("\t<td><strong>%s</strong>: %s</td>" \
+                      % (self.display_name(), self.doc()))
+        strval.append("</tr>\n")
+        return "\n".join(strval)
 
     def write_config(self, file):
         '''Output value in configuration file format.'''
@@ -378,6 +392,7 @@ class OptionsClass(object):
     def __init__(self):
         self.verbose = None
         self._options = {}
+        self.restore_point = {}
         self.conversion_table = {} # set by creator if they need it.
     #
     # Regular expressions for parsing section headers and options.
@@ -498,7 +513,7 @@ class OptionsClass(object):
                 written.append((sect, opt))
 
     def load_defaults(self, defaults):
-        '''Load default values (stored in this module).'''
+        '''Load default values (stored in Options.py).'''
         for section, opts in defaults.items():
             for opt in opts:
                 # If first item of the tuple is a sub-class of Option, then
@@ -515,6 +530,28 @@ class OptionsClass(object):
 
                 o = klass(*args)
                 self._options[section, o.name] = o
+
+    def set_restore_point(self):
+        '''Remember what the option values are right now, to
+        be able to go back to them, via revert_to_restore_point().
+
+        Any existing restore point is wiped.  Restore points do
+        not persist over sessions.
+        '''
+        self.restore_point = {}
+        for key, opt_obj in self._options.iteritems():
+            self.restore_point[key] = opt_obj.get()
+
+    def revert_to_restore_point(self):
+        '''Restore option values to their values when set_restore_point()
+        was last called.
+
+        If set_restore_point() has not been called, then this has no
+        effect.  If new options have been added since set_restore_point,
+        their values are not effected.
+        '''
+        for key, value in self.restore_point.iteritems():
+            self._options[key].set(value)
 
     def merge_files(self, file_list):
         for f in file_list:
@@ -610,11 +647,28 @@ class OptionsClass(object):
         '''Set an option.'''
         if self.conversion_table.has_key((sect, opt.lower())):
             sect, opt = self.conversion_table[sect, opt.lower()]
+            
+        # Annoyingly, we have a special case.  The notate_to and
+        # notate_subject allowed values have to be set to the same
+        # values as the header_x_ options, but this can't be done
+        # (AFAIK) dynmaically. If this isn't the case, then if the
+        # header_x_string values are changed, the notate_ options don't
+        # work.  Outlook Express users like both of these options...so
+        # we fix it here. See also sf #944109.
+        # This code was originally in Options.py, after loading in the
+        # options.  But that doesn't work, because if we are setting
+        # both in a config file, we need it done immediately.
+        # We now need the hack here, *and* in UserInterface.py
+        # For the moment, this will do.  Use a real mail client, for
+        # goodness sake!
+        if sect == "Headers" and opt in ("notate_to", "notate_subject"):
+            self._options[sect, opt.lower()].set(val)
+            return
         if self.is_valid(sect, opt, val):
             self._options[sect, opt.lower()].set(val)
         else:
-            print >> sys.stderr, ("Attempted to set [%s] %s with invalid"
-                                  " value %s (%s)" %
+            print >> sys.stderr, ("Attempted to set [%s] %s with "
+                                  "invalid value %s (%s)" %
                                   (sect, opt.lower(), val, type(val)))
 
     def set_from_cmdline(self, arg, stream=None):
@@ -641,7 +695,6 @@ class OptionsClass(object):
             (opt, sect))
 
     def _report_option_error(self, sect, opt, val, stream, msg):
-        import textwrap
         if sect in self.sections():
             vopts = self.options(True)
             vopts = [v.split(']', 1)[1] for v in vopts
@@ -650,7 +703,7 @@ class OptionsClass(object):
                 print >> stream, "Invalid option:", opt
                 print >> stream, "Valid options for", sect, "are:"
                 vopts = ', '.join(vopts)
-                vopts = textwrap.wrap(vopts)
+                vopts = wrap(vopts)
                 for line in vopts:
                     print >> stream, '  ', line
             else:
@@ -659,7 +712,7 @@ class OptionsClass(object):
             print >> stream, "Invalid section:", sect
             print >> stream, "Valid sections are:"
             vsects = ', '.join(self.sections())
-            vsects = textwrap.wrap(vsects)
+            vsects = wrap(vsects)
             for line in vsects:
                 print >> stream, '  ', line
 
@@ -696,7 +749,7 @@ class OptionsClass(object):
         all.sort()
         return all
 
-    def display(self):
+    def display(self, add_comments=False):
         '''Display options in a config file form.'''
         output = StringIO.StringIO()
         keys = self._options.keys()
@@ -710,11 +763,17 @@ class OptionsClass(object):
                 output.write(sect)
                 output.write("]\n")
                 currentSection = sect
+            if add_comments:
+                doc = self._options[sect, opt].doc()
+                if not doc:
+                    doc = "No information available, sorry."
+                doc = re.sub(r"\s+", " ", doc)
+                output.write("\n# %s\n" % ("\n# ".join(wrap(doc)),))
             self._options[sect, opt].write_config(output)
         return output.getvalue()
 
-    def display_full(self, section=None, option=None):
-        '''Display options including all information.'''
+    def _display_nice(self, section, option, formatter):
+        '''Display a nice output of the options'''
         # Given that the Options class is no longer as nice looking
         # as it once was, this returns all the information, i.e.
         # the doc, default values, and so on
@@ -723,8 +782,8 @@ class OptionsClass(object):
         # when section and option are both specified, this
         # is nothing more than a call to as_nice_string
         if section is not None and option is not None:
-            output.write(self._options[section,
-                                       option.lower()].as_nice_string(section))
+            opt = self._options[section, option.lower()]
+            output.write(getattr(opt, formatter)(section))
             return output.getvalue()
 
         all = self._options.keys()
@@ -732,8 +791,18 @@ class OptionsClass(object):
         for sect, opt in all:
             if section is not None and sect != section:
                 continue
-            output.write(self._options[sect, opt.lower()].as_nice_string(sect))
+            opt = self._options[sect, opt.lower()]
+            output.write(getattr(opt, formatter)(sect))
         return output.getvalue()
+
+    def display_full(self, section=None, option=None):
+        '''Display options including all information.'''
+        return self._display_nice(section, option, 'as_nice_string')
+        
+    def output_for_docs(self, section=None, option=None):
+        '''Return output suitable for inserting into documentation for
+        the available options.'''
+        return self._display_nice(section, option, 'as_documentation_string')
 
 # These are handy references to commonly used regex/tuples defining
 # permitted values. Although the majority of options use one of these,
@@ -750,9 +819,9 @@ PATH = r"[\w \$\.\-~:\\/\*\@\=]+"
 VARIABLE_PATH = PATH + r"%"
 FILE = r"[\S]+"
 FILE_WITH_PATH = PATH
-IP_LIST = r"\*|localhost|((\*|[01]?\d\d?|2[04]\d|25[0-5])\.(\*|[01]?\d" \
-          r"\d?|2[04]\d|25[0-5])\.(\*|[01]?\d\d?|2[04]\d|25[0-5])\.(\*" \
-          r"|[01]?\d\d?|2[04]\d|25[0-5]),?)+"
+IP_LIST = r"\*|localhost|((\*|[01]?\d\d?|2[0-4]\d|25[0-5])\.(\*|[01]?\d" \
+          r"\d?|2[0-4]\d|25[0-5])\.(\*|[01]?\d\d?|2[0-4]\d|25[0-5])\.(\*" \
+          r"|[01]?\d\d?|2[0-4]\d|25[0-5]),?)+"
 # IMAP seems to allow any character at all in a folder name,
 # but we want to use the comma as a delimiter for lists, so
 # we don't allow this.  If anyone has folders with commas in the
@@ -764,11 +833,12 @@ IMAP_FOLDER = r"[^,]+"
 #   "{" number "}" CRLF *CHAR8
 #   where number represents the number of CHAR8 octets
 # but this is too complex for us at the moment.
-IMAP_ASTRING = ""
-for i in range(1, 128):
-    if not chr(i) in ['"', '\\', '\n', '\r']:
-        IMAP_ASTRING += chr(i)
-IMAP_ASTRING = r"\"?\\?[" + re.escape(IMAP_ASTRING) + r"]+\"?"
+IMAP_ASTRING = []
+for _i in xrange(1, 128):
+    if chr(_i) not in ['"', '\\', '\n', '\r']:
+        IMAP_ASTRING.append(chr(_i))
+del _i
+IMAP_ASTRING = r"\"?[" + re.escape(''.join(IMAP_ASTRING)) + r"]+\"?"
 
 # Similarly, each option must specify whether it should be reset to
 # this value on a "reset to defaults" command.  Most should, but with some
@@ -776,3 +846,5 @@ IMAP_ASTRING = r"\"?\\?[" + re.escape(IMAP_ASTRING) + r"]+\"?"
 # Again, for ease of reading, we define these here:
 RESTORE = True
 DO_NOT_RESTORE = False
+
+OCRAD_CHARSET = r"ascii|iso-8859-9|iso-8859-15"

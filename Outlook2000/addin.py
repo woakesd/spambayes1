@@ -1,18 +1,14 @@
 # SpamBayes Outlook Addin
 import sys, os
+import types
 import warnings
 import traceback
 import _winreg
+from types import UnicodeType
 
 # *sigh* - this is for the binary installer, and for the sake of one line
 # that is implicit anyway, I gave up
 import encodings
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
 
 # We have lots of locale woes.  The short story:
 # * Outlook/MAPI will change the locale on us as some predictable
@@ -44,6 +40,7 @@ import timer, thread
 from dialogs.dlgutils import SetWaitCursor
 
 toolbar_name = "SpamBayes"
+ADDIN_DISPLAY_NAME = "SpamBayes Outlook Addin"
 
 # If we are not running in a console, redirect all print statements to the
 # win32traceutil collector.
@@ -124,8 +121,9 @@ def HaveSeenMessage(msgstore_message, manager):
         return True
     # If the message has been trained on, we certainly have seen it before.
     import train
-    if train.been_trained_as_ham(msgstore_message, manager.classifier_data) or \
-       train.been_trained_as_spam(msgstore_message, manager.classifier_data):
+    manager.classifier_data.message_db.load_msg(msgstore_message)
+    if train.been_trained_as_ham(msgstore_message) or \
+       train.been_trained_as_spam(msgstore_message):
         return True
     # I considered checking if the "save spam score" option is enabled - but
     # even when enabled, this sometimes fails (IMAP, hotmail)
@@ -148,9 +146,10 @@ def TrainAsHam(msgstore_message, manager, rescore = True, save_db = True):
 
     else:
         print "already was trained as good"
-    assert train.been_trained_as_ham(msgstore_message, manager.classifier_data)
+    manager.classifier_data.message_db.load_msg(msgstore_message)
+    assert train.been_trained_as_ham(msgstore_message)
     if save_db:
-        manager.SaveBayesPostIncrementalTrain()
+        manager.classifier_data.SavePostIncrementalTrain()
 
 def TrainAsSpam(msgstore_message, manager, rescore = True, save_db = True):
     import train
@@ -166,10 +165,11 @@ def TrainAsSpam(msgstore_message, manager, rescore = True, save_db = True):
             filter.filter_message(msgstore_message, manager, all_actions = False)
     else:
         print "already was trained as spam"
-    assert train.been_trained_as_spam(msgstore_message, manager.classifier_data)
+    manager.classifier_data.message_db.load_msg(msgstore_message)
+    assert train.been_trained_as_spam(msgstore_message)
     # And if the DB can save itself incrementally, do it now
     if save_db:
-        manager.SaveBayesPostIncrementalTrain()
+        manager.classifier_data.SavePostIncrementalTrain()
 
 # Function to filter a message - note it is a msgstore msg, not an
 # outlook one
@@ -189,7 +189,8 @@ def ProcessMessage(msgstore_message, manager):
             # otherwise just ignore.
             if manager.config.training.train_recovered_spam:
                 import train
-                if train.been_trained_as_spam(msgstore_message, manager.classifier_data):
+                manager.classifier_data.message_db.load_msg(msgstore_message)
+                if train.been_trained_as_spam(msgstore_message):
                     need_train = True
                 else:
                     prop = msgstore_message.GetField(manager.config.general.field_score_name)
@@ -199,7 +200,7 @@ def ProcessMessage(msgstore_message, manager):
                     # If it was not previously classified as either 'Spam' or
                     # 'Unsure', then this event is unlikely to be the user
                     # re-classifying (and in fact it may simply be the Outlook
-                    # rules moving the item.
+                    # rules moving the item).
                     need_train = manager.config.filter.unsure_threshold < prop * 100
 
                 if need_train:
@@ -218,6 +219,8 @@ def ProcessMessage(msgstore_message, manager):
                   % (msgstore_message.GetSubject(),
                      folder_name,
                      disposition)
+
+            manager.HandleNotification(disposition)
         else:
             print "Spam filtering is disabled - ignoring new message"
     except manager.message_store.NotFoundException:
@@ -281,13 +284,14 @@ class HamFolderItemsEvent(_BaseItemsEvent):
         # Don't allow insane values for the timer.
         if use_timer:
             too = None
-            if type(start_delay) != type(0.0) or type(interval) != type(0.0):
+            if not isinstance(start_delay, types.FloatType) or \
+               not isinstance(interval, types.FloatType):
                 print "*" * 50
                 print "Timer values are garbage!", repr(start_delay), repr(interval)
                 use_timer = False
             elif start_delay < 0.4 or interval < 0.4:
                 too = "too often"
-            elif start_delay > 30 or interval > 30:
+            elif start_delay > 60 or interval > 60:
                 too = "too infrequently"
             if too:
                 print "*" * 50
@@ -313,7 +317,7 @@ class HamFolderItemsEvent(_BaseItemsEvent):
     def _DoStartTimer(self, delay):
         assert thread.get_ident() == self.owner_thread_ident
         assert self.timer_id is None, "Shouldn't start a timer when already have one"
-        assert type(delay)==type(0.0), "Timer values are float seconds"
+        assert isinstance(delay, types.FloatType), "Timer values are float seconds"
         # And start a new timer.
         assert delay, "No delay means no timer!"
         delay = int(delay*1000) # convert to ms.
@@ -401,8 +405,8 @@ class SpamFolderItemsEvent(_BaseItemsEvent):
         # then it should be trained as such.
         self.manager.LogDebug(2, "OnItemAdd event for SPAM folder", self,
                               "with item", item.Subject.encode("mbcs", "ignore"))
-        if not self.manager.config.training.train_manual_spam:
-            return
+        assert not self.manager.config.training.train_manual_spam, \
+               "The folder shouldn't be hooked if this is False"
         # XXX - Theoretically we could get "not found" exception here,
         # but we have never guarded for it, and never seen it.  If it does
         # happen life will go on, so for now we continue to ignore it.
@@ -421,7 +425,8 @@ class SpamFolderItemsEvent(_BaseItemsEvent):
             # Assuming that rescoring is more expensive than checking if
             # previously trained, try and optimize.
             import train
-            if train.been_trained_as_ham(msgstore_message, self.manager.classifier_data):
+            self.manager.classifier_data.message_db.load_msg(msgstore_message)
+            if train.been_trained_as_ham(msgstore_message):
                 need_train = True
             else:
                 prop = msgstore_message.GetField(self.manager.config.general.field_score_name)
@@ -432,18 +437,11 @@ class SpamFolderItemsEvent(_BaseItemsEvent):
             if need_train:
                 TrainAsSpam(msgstore_message, self.manager)
 
-# Event function fired from the "Show Clues" UI items.
-def ShowClues(mgr, explorer):
+def GetClues(mgr, msgstore_message):
     from cgi import escape
-
-    app = explorer.Application
-    msgstore_message = explorer.GetSelectedMessages(False)
-    if msgstore_message is None:
-        return
-
-    item = msgstore_message.GetOutlookItem()
+    mgr.classifier_data.message_db.load_msg(msgstore_message)
     score, clues = mgr.score(msgstore_message, evidence=True)
-    new_msg = app.CreateItem(0)
+
     # NOTE: Silly Outlook always switches the message editor back to RTF
     # once the Body property has been set.  Thus, there is no reasonable
     # way to get this as text only.  Next best then is to use HTML, 'cos at
@@ -459,6 +457,43 @@ def ShowClues(mgr, explorer):
     push("<br>\n")
     push("# ham trained on: %d<br>\n" % c.nham)
     push("# spam trained on: %d<br>\n" % c.nspam)
+    push("<br>\n")
+
+    # Report last modified date.
+    modified_date = msgstore_message.date_modified
+    if modified_date:
+        from time import localtime, strftime
+        modified_date = localtime(modified_date)
+        date_string = strftime("%a, %d %b %Y %I:%M:%S %p", modified_date)
+        push("As at %s:<br>\n" % (date_string,))
+    else:
+        push("The last time this message was classified or trained:<br>\n")
+
+    # Score when the message was classified - this will hopefully help
+    # people realise that it may not necessarily be the same, and will
+    # help diagnosing any 'wrong' scoring reported.
+    original_score = msgstore_message.GetField(\
+        mgr.config.general.field_score_name)
+    if original_score is not None:
+        original_score *= 100.0
+        if original_score >= mgr.config.filter.spam_threshold:
+            original_class = "spam"
+        elif original_score >= mgr.config.filter.unsure_threshold:
+            original_class = "unsure"
+        else:
+            original_class = "good"
+    if original_score is None:
+        push("This message had not been filtered.")
+    else:
+        original_score = round(original_score)
+        push("This message was classified as %s (it scored %d%%)." % \
+             (original_class, original_score))
+    # Report whether this message has been trained or not.
+    push("<br>\n")
+    push("This message had %sbeen trained%s." % \
+         {False : ("", " as ham"), True : ("", " as spam"),
+          None : ("not ", "")}[msgstore_message.t])
+
     # Format the clues.
     push("<h2>%s Significant Tokens</h2>\n<PRE>" % len(clues))
     push("<strong>")
@@ -473,15 +508,18 @@ def ShowClues(mgr, explorer):
             nspam = record.spamcount
         else:
             nham = nspam = "-"
-        word = repr(word)
+        if isinstance(word, UnicodeType):
+            word = word.encode('mbcs', 'replace')
+        else:
+            word = repr(word)
         push(escape(word) + " " * (35-len(word)))
         push(format % (prob, nham, nspam))
     push("</PRE>\n")
 
     # Now the raw text of the message, as best we can
     push("<h2>Message Stream</h2>\n")
-    push("<PRE>\n")
     msg = msgstore_message.GetEmailPackageObject(strip_mime_headers=False)
+    push("<PRE>\n")
     push(escape(msg.as_string(), True))
     push("</PRE>\n")
 
@@ -501,10 +539,27 @@ def ShowClues(mgr, explorer):
     # However, <code> does not require escaping.
     # could use pprint, but not worth it.
     for token in toks:
-        push("<code>" + repr(token) + "</code><br>\n")
+        if isinstance(token, UnicodeType):
+            token = token.encode('mbcs', 'replace')
+        else:
+            token = repr(token)
+        push("<code>" + token + "</code><br>\n")
 
     # Put the body together, then the rest of the message.
     body = ''.join(body)
+    return body
+
+# Event function fired from the "Show Clues" UI items.
+def ShowClues(mgr, explorer):
+
+    app = explorer.Application
+    msgstore_message = explorer.GetSelectedMessages(False)
+    if msgstore_message is None:
+        return
+
+    body = GetClues(mgr, msgstore_message)
+    item = msgstore_message.GetOutlookItem()
+    new_msg = app.CreateItem(0)
     new_msg.Subject = "Spam Clues: " + item.Subject
     # As above, use HTMLBody else Outlook refuses to behave.
     new_msg.HTMLBody = """\
@@ -525,50 +580,75 @@ def ShowClues(mgr, explorer):
                             DisplayName="Original Message")
     new_msg.Display()
 
-def CheckLatestVersion(manager):
-    from spambayes.Version import get_version_string, get_version_number, fetch_latest_dict
-    if hasattr(sys, "frozen"):
-        version_number_key = "BinaryVersion"
-        version_string_key = "Full Description Binary"
+# Event function fired from the "Empty Spam Folder" UI item.
+def EmptySpamFolder(mgr):
+    config = mgr.config.filter
+    ms = mgr.message_store
+    spam_folder_id = getattr(config, "spam_folder_id")
+    try:
+        spam_folder = ms.GetFolder(spam_folder_id)
+    except ms.MsgStoreException:
+        mgr.LogDebug(0, "ERROR: Unable to open the spam folder for emptying - " \
+                        "spam messages were not deleted")
     else:
-        version_number_key = "Version"
-        version_string_key = "Full Description"
+        try:
+            if spam_folder.GetItemCount() > 0:
+                message = _("Are you sure you want to permanently delete " \
+                            "all items in the \"%s\" folder?") \
+                            % spam_folder.name
+                if mgr.AskQuestion(message):
+                    mgr.LogDebug(2, "Emptying spam from folder '%s'" % \
+                                 spam_folder.GetFQName())
+                    import manager
+                    spam_folder.EmptyFolder(manager._GetParent())
+            else:
+                mgr.LogDebug(2, "Spam folder '%s' was already empty" % \
+                             spam_folder.GetFQName())
+                message = _("The \"%s\" folder is already empty.") % \
+                          spam_folder.name
+                mgr.ReportInformation(message)
+        except:
+            mgr.LogDebug(0, "Error emptying spam folder '%s'!" % \
+                         spam_folder.GetFQName())
+            traceback.print_exc()
+
+def CheckLatestVersion(manager):
+    from spambayes.Version import get_current_version, get_version, \
+            get_download_page, fetch_latest_dict
 
     app_name = "Outlook"
-    cur_ver_string = get_version_string(app_name, version_string_key)
-    cur_ver_num = get_version_number(app_name, version_number_key)
+    ver_current = get_current_version()
+    cur_ver_string = ver_current.get_long_version(ADDIN_DISPLAY_NAME)
 
     try:
         SetWaitCursor(1)
         latest = fetch_latest_dict()
         SetWaitCursor(0)
-        latest_ver_string = get_version_string(app_name, version_string_key,
-                                               version_dict=latest)
-        latest_ver_num = get_version_number(app_name, version_number_key,
-                                            version_dict=latest)
+        ver_latest = get_version(app_name, version_dict=latest)
+        latest_ver_string = ver_latest.get_long_version(ADDIN_DISPLAY_NAME)
     except:
         print "Error checking the latest version"
         traceback.print_exc()
         manager.ReportError(
-            "There was an error checking for the latest version\r\n"
-            "For specific details on the error, please see the SpamBayes log"
-            "\r\n\r\nPlease check your internet connection, or try again later"
+            _("There was an error checking for the latest version\r\n"
+              "For specific details on the error, please see the SpamBayes log"
+              "\r\n\r\nPlease check your internet connection, or try again later")
         )
         return
 
-    print "Current version is %s, latest is %s." % (cur_ver_num, latest_ver_num)
-    if latest_ver_num > cur_ver_num:
-        url = get_version_string(app_name, "Download Page", version_dict=latest)
-        msg = "You are running %s\r\n\r\nThe latest available version is %s" \
-              "\r\n\r\nThe download page for the latest version is\r\n%s" \
-              "\r\n\r\nWould you like to visit this page now?" \
-              % (cur_ver_string, latest_ver_string, url)
+    print "Current version is %s, latest is %s." % (str(ver_current), str(ver_latest))
+    if ver_latest > ver_current:
+        url = get_download_page(app_name, version_dict=latest)
+        msg = _("You are running %s\r\n\r\nThe latest available version is %s" \
+                "\r\n\r\nThe download page for the latest version is\r\n%s" \
+                "\r\n\r\nWould you like to visit this page now?") \
+                % (cur_ver_string, latest_ver_string, url)
         if manager.AskQuestion(msg):
             print "Opening browser page", url
             os.startfile(url)
     else:
-        msg = "The latest available version is %s\r\n\r\n" \
-              "No later version is available." % latest_ver_string
+        msg = _("The latest available version is %s\r\n\r\n" \
+                "No later version is available.") % latest_ver_string
         manager.ReportInformation(msg)
 
 # A hook for whatever tests we have setup
@@ -585,7 +665,7 @@ def Tester(manager):
         print "Tests FAILED.  Sorry about that.  If I were you, I would do a full re-train ASAP"
         print "Please delete any test messages from your Spam, Unsure or Inbox/Watch folders first."
 
-# The "Delete As Spam" and "Recover Spam" button
+# The "Spam" and "Not Spam" buttons
 # The event from Outlook's explorer that our folder has changed.
 class ButtonDeleteAsEventBase:
     def Init(self, manager, explorer):
@@ -607,8 +687,8 @@ class ButtonDeleteAsSpamEvent(ButtonDeleteAsEventBase):
         # the button state as the manager dialog closes.
         if not self.manager.config.filter.enabled:
             self.manager.ReportError(
-                "You must configure and enable SpamBayes before you can " \
-                "delete as spam")
+                _("You must configure and enable SpamBayes before you " \
+                  "can mark messages as spam"))
             return
         SetWaitCursor(1)
         # Delete this item as spam.
@@ -622,15 +702,19 @@ class ButtonDeleteAsSpamEvent(ButtonDeleteAsEventBase):
             except msgstore.MsgStoreException:
                 pass
         if spam_folder is None:
-            self.manager.ReportError("You must configure the Spam folder",
-                               "Invalid Configuration")
+            self.manager.ReportError(_("You must configure the Spam folder"),
+                                     _("Invalid Configuration"))
             return
         import train
         new_msg_state = self.manager.config.general.delete_as_spam_message_state
         for msgstore_message in msgstore_messages:
             # Record this recovery in our stats.
-            self.manager.stats.RecordManualClassification(False,
-                                    self.manager.score(msgstore_message))
+            self.manager.stats.RecordTraining(False,
+                                self.manager.score(msgstore_message))
+            # Record the original folder, in case this message is not where
+            # it was after filtering, or has never been filtered.
+            msgstore_message.RememberMessageCurrentFolder()
+            msgstore_message.Save()
             # Must train before moving, else we lose the message!
             subject = msgstore_message.GetSubject()
             print "Moving and spam training message '%s' - " % (subject,),
@@ -651,7 +735,7 @@ class ButtonDeleteAsSpamEvent(ButtonDeleteAsEventBase):
             # Note the move will possibly also trigger a re-train
             # but we are smart enough to know we have already done it.
         # And if the DB can save itself incrementally, do it now
-        self.manager.SaveBayesPostIncrementalTrain()
+        self.manager.classifier_data.SavePostIncrementalTrain()
         SetWaitCursor(0)
 
 class ButtonRecoverFromSpamEvent(ButtonDeleteAsEventBase):
@@ -666,8 +750,8 @@ class ButtonRecoverFromSpamEvent(ButtonDeleteAsEventBase):
         # the button state as the manager dialog closes.
         if not self.manager.config.filter.enabled:
             self.manager.ReportError(
-                "You must configure and enable SpamBayes before you can " \
-                "recover spam")
+                _("You must configure and enable SpamBayes before you " \
+                  "can mark messages as not spam"))
             return
         SetWaitCursor(1)
         # Get the inbox as the default place to restore to
@@ -686,6 +770,7 @@ class ButtonRecoverFromSpamEvent(ButtonDeleteAsEventBase):
             # *before* we do the move (and saving after is hard))
             try:
                 subject = msgstore_message.GetSubject()
+                self.manager.classifier_data.message_db.load_msg(msgstore_message)
                 restore_folder = msgstore_message.GetRememberedFolder()
                 if restore_folder is None or \
                    msgstore_message.GetFolder() == restore_folder:
@@ -693,7 +778,7 @@ class ButtonRecoverFromSpamEvent(ButtonDeleteAsEventBase):
                     restore_folder = inbox_folder
 
                 # Record this recovery in our stats.
-                self.manager.stats.RecordManualClassification(True,
+                self.manager.stats.RecordTraining(True,
                                         self.manager.score(msgstore_message))
                 # Must train before moving, else we lose the message!
                 print "Recovering to folder '%s' and ham training message '%s' - " % (restore_folder.name, subject),
@@ -714,11 +799,11 @@ class ButtonRecoverFromSpamEvent(ButtonDeleteAsEventBase):
                 msgstore_message.MoveToReportingError(self.manager, restore_folder)
             except msgstore.NotFoundException:
                 # Message moved under us - ignore.
-                self.manager.LogDebug(1, "Recover from spam had message moved from underneath us - ignored")
+                self.manager.LogDebug(1, "'Not Spam' had message moved from underneath us - ignored")
             # Note the move will possibly also trigger a re-train
             # but we are smart enough to know we have already done it.
         # And if the DB can save itself incrementally, do it now
-        self.manager.SaveBayesPostIncrementalTrain()
+        self.manager.classifier_data.SavePostIncrementalTrain()
         SetWaitCursor(0)
 
 # Helpers to work with images on buttons/toolbars.
@@ -764,29 +849,29 @@ class ExplorerWithEvents:
         manager = self.manager
         assert self.toolbar is None, "Should not yet have a toolbar"
 
-        # Add our "Delete as ..." and "Recover from" buttons
-        tt_text = "Move the selected message to the Spam folder,\n" \
-                  "and train the system that this is Spam."
+        # Add our "Spam" and "Not Spam" buttons
+        tt_text = _("Move the selected message to the Spam folder,\n" \
+                    "and train the system that this is Spam.")
         self.but_delete_as = self._AddControl(
                         None,
                         constants.msoControlButton,
                         ButtonDeleteAsSpamEvent, (self.manager, self),
-                        Caption="Delete As Spam",
+                        Caption=_("Spam"),
                         TooltipText = tt_text,
                         BeginGroup = False,
                         Tag = "SpamBayesCommand.DeleteAsSpam",
                         image = "delete_as_spam.bmp")
-        # And again for "Recover from"
-        tt_text = \
-                "Recovers the selected item back to the folder\n" \
-                "it was filtered from (or to the Inbox if this\n" \
-                "folder is not known), and trains the system that\n" \
-                "this is a good message\n"
+        # And again for "Not Spam"
+        tt_text = _(\
+            "Recovers the selected item back to the folder\n" \
+            "it was filtered from (or to the Inbox if this\n" \
+            "folder is not known), and trains the system that\n" \
+            "this is a good message\n")
         self.but_recover_as = self._AddControl(
                         None,
                         constants.msoControlButton,
                         ButtonRecoverFromSpamEvent, (self.manager, self),
-                        Caption="Recover from Spam",
+                        Caption=_("Not Spam"),
                         TooltipText = tt_text,
                         Tag = "SpamBayesCommand.RecoverFromSpam",
                         image = "recover_ham.bmp")
@@ -800,8 +885,8 @@ class ExplorerWithEvents:
                             None,
                             constants.msoControlPopup,
                             None, None,
-                            Caption="SpamBayes",
-                            TooltipText = "SpamBayes anti-spam filters and functions",
+                            Caption=_("SpamBayes"),
+                            TooltipText = _("SpamBayes anti-spam filters and functions"),
                             Enabled = True,
                             Tag = "SpamBayesCommand.Popup")
             if popup is None:
@@ -818,8 +903,8 @@ class ExplorerWithEvents:
             child = self._AddControl(popup,
                            constants.msoControlButton,
                            ButtonEvent, (manager.ShowManager,),
-                           Caption="SpamBayes Manager...",
-                           TooltipText = "Show the SpamBayes manager dialog.",
+                           Caption=_("SpamBayes Manager..."),
+                           TooltipText = _("Show the SpamBayes manager dialog."),
                            Enabled = True,
                            Visible=True,
                            Tag = "SpamBayesCommand.Manager")
@@ -846,52 +931,61 @@ class ExplorerWithEvents:
             self._AddControl(popup,
                            constants.msoControlButton,
                            ButtonEvent, (ShowClues, self.manager, self),
-                           Caption="Show spam clues for current message",
+                           Caption=_("Show spam clues for current message"),
                            Enabled=True,
                            Visible=True,
                            Tag = "SpamBayesCommand.Clues")
             self._AddControl(popup,
                            constants.msoControlButton,
                            ButtonEvent, (manager.ShowFilterNow,),
-                           Caption="Filter messages...",
+                           Caption=_("Filter messages..."),
                            Enabled=True,
                            Visible=True,
                            Tag = "SpamBayesCommand.FilterNow")
             self._AddControl(popup,
                            constants.msoControlButton,
-                           ButtonEvent, (CheckLatestVersion, self.manager,),
-                           Caption="Check for new version",
+                           ButtonEvent, (EmptySpamFolder, self.manager),
+                           Caption=_("Empty Spam Folder"),
                            Enabled=True,
                            Visible=True,
+                           BeginGroup=True,
+                           Tag = "SpamBayesCommand.EmptySpam")
+            self._AddControl(popup,
+                           constants.msoControlButton,
+                           ButtonEvent, (CheckLatestVersion, self.manager,),
+                           Caption=_("Check for new version"),
+                           Enabled=True,
+                           Visible=True,
+                           BeginGroup=True,
                            Tag = "SpamBayesCommand.CheckVersion")
             helpPopup = self._AddControl(
                             popup,
                             constants.msoControlPopup,
                             None, None,
-                            Caption="Help",
-                            TooltipText = "SpamBayes help documents",
+                            Caption=_("Help"),
+                            TooltipText = _("SpamBayes help documents"),
                             Enabled = True,
                             Tag = "SpamBayesCommand.HelpPopup")
             if helpPopup is not None:
                 helpPopup = CastTo(helpPopup, "CommandBarPopup")
                 self._AddHelpControl(helpPopup,
-                                     "About SpamBayes",
+                                     _("About SpamBayes"),
                                      "about.html",
                                      "SpamBayesCommand.Help.ShowAbout")
                 self._AddHelpControl(helpPopup,
-                                     "Troubleshooting Guide",
+                                     _("Troubleshooting Guide"),
                                      "docs/troubleshooting.html",
                                      "SpamBayesCommand.Help.ShowTroubleshooting")
                 self._AddHelpControl(helpPopup,
-                                     "SpamBayes Website",
+                                     _("SpamBayes Website"),
                                      "http://spambayes.sourceforge.net/",
                                      "SpamBayesCommand.Help.ShowSpamBayes Website")
                 self._AddHelpControl(helpPopup,
-                                     "Frequently Asked Questions",
+                                     _("Frequently Asked Questions"),
                                      "http://spambayes.sourceforge.net/faq.html",
                                      "SpamBayesCommand.Help.ShowFAQ")
                 self._AddHelpControl(helpPopup,
-                                     "SpamBayes Bug Tracker",
+                                     _("SpamBayes Bug Tracker"),
                                      "http://sourceforge.net/tracker/?group_id=61702&atid=498103",
                                      "SpamBayesCommand.Help.BugTacker")
 
@@ -900,9 +994,10 @@ class ExplorerWithEvents:
             self._AddControl(popup,
                            constants.msoControlButton,
                            ButtonEvent, (Tester, self.manager),
-                           Caption="Execute test suite",
+                           Caption=_("Execute test suite"),
                            Enabled=True,
                            Visible=True,
+                           BeginGroup=True,
                            Tag = "SpamBayesCommand.TestSuite")
         self.have_setup_ui = True
 
@@ -1013,7 +1108,8 @@ class ExplorerWithEvents:
             explorer = self.Application.ActiveExplorer()
         sel = explorer.Selection
         if sel.Count > 1 and not allow_multi:
-            self.manager.ReportError("Please select a single item", "Large selection")
+            self.manager.ReportError(_("Please select a single item"),
+                                     _("Large selection"))
             return None
 
         ret = []
@@ -1032,7 +1128,8 @@ class ExplorerWithEvents:
                 print details
 
         if len(ret) == 0:
-            self.manager.ReportError("No filterable mail items are selected", "No selection")
+            self.manager.ReportError(_("No filterable mail items are selected"),
+                                     _("No selection"))
             return None
         if allow_multi:
             return ret
@@ -1058,7 +1155,7 @@ class ExplorerWithEvents:
             self.OnFolderSwitch()
 
     def OnClose(self):
-        self.manager.LogDebug(3, "OnClose", self)
+        self.manager.LogDebug(3, "Explorer window closing", self)
         self.explorers_collection._DoDeadExplorer(self)
         self.explorers_collection = None
         self.toolbar = None
@@ -1102,12 +1199,12 @@ class ExplorerWithEvents:
             except:
                 print "Error finding the MAPI folders for a folder switch event"
                 # As this happens once per move, we should only display it once.
-                self.manager.ReportErrorOnce(
+                self.manager.ReportErrorOnce(_(
                     "There appears to be a problem with the SpamBayes"
                     " configuration\r\n\r\nPlease select the SpamBayes"
                     " manager, and run the\r\nConfiguration Wizard to"
-                    " reconfigure the filter.",
-                    "Invalid SpamBayes Configuration")
+                    " reconfigure the filter."),
+                    _("Invalid SpamBayes Configuration"))
                 traceback.print_exc()
         if self.but_recover_as is not None:
             self.but_recover_as.Visible = show_recover_as
@@ -1194,16 +1291,17 @@ class OutlookAddin:
 
             # Only now will the import of "spambayes.Version" work, as the
             # manager is what munges sys.path for us.
-            from spambayes.Version import get_version_string
-            version_key = "Full Description"
-            if hasattr(sys, "frozen"): version_key += " Binary"
-            print "%s starting (with engine %s)" % \
-                    (get_version_string("Outlook", version_key),
-                     get_version_string())
+            from spambayes.Version import get_current_version
+            v = get_current_version()
+            vstring = v.get_long_version(ADDIN_DISPLAY_NAME)
+            if not hasattr(sys, "frozen"): vstring += " from source"
+            print vstring
             major, minor, spack, platform, ver_str = win32api.GetVersionEx()
             print "on Windows %d.%d.%d (%s)" % \
                   (major, minor, spack, ver_str)
             print "using Python", sys.version
+            from time import asctime, localtime
+            print "Log created", asctime(localtime())
 
             self.explorers_events = None # create at OnStartupComplete
 
@@ -1215,6 +1313,8 @@ class OutlookAddin:
         except:
             print "Error connecting to Outlook!"
             traceback.print_exc()
+            # We can't translate this string, as we haven't managed to load
+            # the translation tools.
             manager.ReportError(
                 "There was an error initializing the SpamBayes addin\r\n\r\n"
                 "Please re-start Outlook and try again.")
@@ -1238,8 +1338,8 @@ class OutlookAddin:
             # days, so could possibly die.
             if not self.manager.config.filter.spam_folder_id or \
                not self.manager.config.filter.watch_folder_ids:
-                msg = "It appears there was an error loading your configuration\r\n\r\n" \
-                      "Please re-configure SpamBayes via the SpamBayes dropdown"
+                msg = _("It appears there was an error loading your configuration\r\n\r\n" \
+                        "Please re-configure SpamBayes via the SpamBayes dropdown")
                 self.manager.ReportError(msg)
             # But continue on regardless.
             self.FiltersChanged()
@@ -1253,8 +1353,8 @@ class OutlookAddin:
             # a number of "it doesn't work" bugs are simply related to not
             # being enabled.  The new Wizard should help, but things can
             # still screw up.
-            self.manager.LogDebug(0, "*** SpamBayes is NOT enabled, so will " \
-                                     "not filter incoming mail. ***")
+            self.manager.LogDebug(0, _("*** SpamBayes is NOT enabled, so " \
+                                       "will not filter incoming mail. ***"))
         # Toolbar and other UI stuff must be setup once startup is complete.
         explorers = self.application.Explorers
         if self.manager is not None: # If we successfully started up.
@@ -1330,7 +1430,8 @@ class OutlookAddin:
                                    "filtering")
             )
         # For spam manually moved
-        if config.spam_folder_id:
+        if config.spam_folder_id and \
+           self.manager.config.training.train_manual_spam:
             new_hooks.update(
                 self._HookFolderEvents([config.spam_folder_id],
                                        False,
@@ -1415,7 +1516,10 @@ class OutlookAddin:
             # config never needs saving as it is always done by whoever changes
             # it (ie, the dialog)
             self.manager.Save()
-            # Report some simple stats.
+            # Report some simple stats, for session, and for total.
+            print "Session:"
+            print "\r\n".join(self.manager.stats.GetStats(session_only=True))
+            print "Total:"
             print "\r\n".join(self.manager.stats.GetStats())
             self.manager.Close()
             self.manager = None

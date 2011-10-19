@@ -4,23 +4,19 @@ import cPickle
 import os
 import sys
 import errno
+import types
 import shutil
 import traceback
 import operator
 import win32api, win32con, win32gui
+
+import timer, thread
 
 import win32com.client
 import win32com.client.gencache
 import pythoncom
 
 import msgstore
-import oastats
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
 
 # Characters valid in a filename.  Used to nuke bad chars from the profile
 # name (which we try and use as a filename).
@@ -73,27 +69,26 @@ if hasattr(sys, "frozen"):
     assert sys.frozen == "dll", "outlook only supports inproc servers"
     this_filename = win32api.GetModuleFileName(sys.frozendllhandle)
 else:
-    try:
-        this_filename = os.path.abspath(__file__)
-    except NameError: # no __file__ - means Py2.2 and __name__=='__main__'
-        this_filename = os.path.abspath(sys.argv[0])
+    this_filename = os.path.abspath(__file__)
 
+# Ensure that a bsddb module is available if we are frozen.
 # See if we can use the new bsddb module. (The old one is unreliable
 # on Windows, so we don't use that)
-try:
-    import bsddb3 as bsddb
-    # bsddb3 is definitely not broken
-    use_db = True
-except ImportError:
-    # Not using the 3rd party bsddb3, so try the one in the std library
+if hasattr(sys, "frozen"):
+    try:
+        import bsddb3
+    except ImportError:
+        bsddb3 = None
     try:
         import bsddb
-        use_db = hasattr(bsddb, "db") # This name is not in the old one.
     except ImportError:
-        # No DB library at all!
-        assert not hasattr(sys, "frozen"), \
-               "Don't build binary versions without bsddb!"
-        use_db = False
+        bsddb = None
+    else:
+        # This name is not in the old (bad) one.
+        if not hasattr(bsddb, "db"):
+            bsddb = None
+    assert bsddb or bsddb3, \
+           "Don't build binary versions without bsddb!"
 
 # This is a little bit of a hack <wink>.  We are generally in a child
 # directory of the bayes code.  To help installation, we handle the
@@ -106,15 +101,19 @@ except ImportError:
 # must not import spambayes.Options) and sets up sys.path, and "later" core
 # stuff, which can include spambayes.Options, and assume sys.path in place.
 def import_early_core_spambayes_stuff():
+    global bayes_i18n
     try:
         from spambayes import OptionsClass
     except ImportError:
         parent = os.path.abspath(os.path.join(os.path.dirname(this_filename),
                                               ".."))
         sys.path.insert(0, parent)
+    from spambayes import i18n
+    bayes_i18n = i18n
 
 def import_core_spambayes_stuff(ini_filenames):
-    global bayes_classifier, bayes_tokenize, bayes_storage
+    global bayes_classifier, bayes_tokenize, bayes_storage, bayes_options, \
+           bayes_message, bayes_stats
     if "spambayes.Options" in sys.modules:
         # The only thing we are worried about here is spambayes.Options
         # being imported before we have determined the INI files we need to
@@ -140,11 +139,17 @@ def import_core_spambayes_stuff(ini_filenames):
     from spambayes import classifier
     from spambayes.tokenizer import tokenize
     from spambayes import storage
+    from spambayes import message
+    from spambayes import Stats
     bayes_classifier = classifier
     bayes_tokenize = tokenize
     bayes_storage = storage
+    bayes_message = message
+    bayes_stats = Stats
     assert "spambayes.Options" in sys.modules, \
         "Expected 'spambayes.Options' to be loaded here"
+    from spambayes.Options import options
+    bayes_options = options
 
 # Function to "safely" save a pickle, only overwriting
 # the existing file after a successful write.
@@ -164,12 +169,16 @@ def SavePickle(what, filename):
 
 # Base class for our "storage manager" - we choose between the pickle
 # and DB versions at runtime.  As our bayes uses spambayes.storage,
-# our base class can share common bayes loading code.
+# our base class can share common bayes loading code, and we use
+# spambayes.message, so the base class can share common message info
+# code, too.
 class BasicStorageManager:
     db_extension = None # for pychecker - overwritten by subclass
     def __init__(self, bayes_base_name, mdb_base_name):
-        self.bayes_filename = bayes_base_name + self.db_extension
-        self.mdb_filename = mdb_base_name + self.db_extension
+        self.bayes_filename = bayes_base_name.encode(filesystem_encoding) + \
+                              self.db_extension
+        self.mdb_filename = mdb_base_name.encode(filesystem_encoding) + \
+                            self.db_extension
     def new_bayes(self):
         # Just delete the file and do an "open"
         try:
@@ -180,46 +189,43 @@ class BasicStorageManager:
     def store_bayes(self, bayes):
         bayes.store()
     def open_bayes(self):
-        raise NotImplementedError
+        return bayes_storage.open_storage(self.bayes_filename, self.klass)
     def close_bayes(self, bayes):
         bayes.close()
+    def open_mdb(self):
+        # MessageInfo storage types may lag behind, so use pickle if the
+        # matching type isn't available.
+        if self.klass in bayes_message._storage_types.keys():
+            return bayes_message.open_storage(self.mdb_filename, self.klass)
+        return bayes_message.open_storage(self.mdb_filename, "pickle")
+    def store_mdb(self, mdb):
+        mdb.store()
+    def close_mdb(self, mdb):
+        mdb.close()
 
 class PickleStorageManager(BasicStorageManager):
     db_extension = ".pck"
-    def open_bayes(self):
-        return bayes_storage.PickledClassifier(self.bayes_filename)
-    def open_mdb(self):
-        return cPickle.load(open(self.mdb_filename, 'rb'))
+    klass = "pickle"
     def new_mdb(self):
         return {}
-    def store_mdb(self, mdb):
-        SavePickle(mdb, self.mdb_filename)
-    def close_mdb(self, mdb):
-        pass
     def is_incremental(self):
         return False # False means we always save the entire DB
 
 class DBStorageManager(BasicStorageManager):
     db_extension = ".db"
-    def open_bayes(self):
-        # bsddb doesn't handle unicode filenames yet :(
-        fname = self.bayes_filename.encode(filesystem_encoding)
-        return bayes_storage.DBDictClassifier(fname)
-    def open_mdb(self):
-        fname = self.mdb_filename.encode(filesystem_encoding)
-        return bsddb.hashopen(fname)
+    klass = "dbm"
     def new_mdb(self):
         try:
             os.unlink(self.mdb_filename)
         except EnvironmentError, e:
             if e.errno != errno.ENOENT: raise
         return self.open_mdb()
-    def store_mdb(self, mdb):
-        mdb.sync()
-    def close_mdb(self, mdb):
-        mdb.close()
     def is_incremental(self):
         return True # True means only changed records get actually written
+
+class ZODBStorageManager(DBStorageManager):
+    db_extension = ".fs"
+    klass = "zodb"
 
 # Encapsulates our entire classification database
 # This allows a couple of different "databases" to be open at once
@@ -249,9 +255,12 @@ class ClassifierData:
 
         self.logger.LogDebug(0, "Bayes database initialized with "
                    "%d spam and %d good messages" % (bayes.nspam, bayes.nham))
-        if len(message_db) != bayes.nham + bayes.nspam:
-            print "*** - message database has %d messages - bayes has %d - something is screwey" % \
-                    (len(message_db), bayes.nham + bayes.nspam)
+        # Once, we checked that the message database was the same length
+        # as the training database here.  However, we now store information
+        # about messages that are classified but not trained in the message
+        # database, so the lengths will not be equal (unless all messages
+        # are trained).  That step doesn't really gain us anything, anyway,
+        # since it no longer would tell us useful information, so remove it.
         self.bayes = bayes
         self.message_db = message_db
         self.dirty = False
@@ -281,11 +290,6 @@ class ClassifierData:
         import time
         start = time.clock()
         bayes = self.bayes
-        # Try and work out where this count sometimes goes wrong.
-        if bayes.nspam + bayes.nham != len(self.message_db):
-            print "WARNING: Bayes database has %d messages, " \
-                  "but training database has %d" % \
-                  (bayes.nspam + bayes.nham, len(self.message_db))
 
         if self.logger.verbose:
             print "Saving bayes database with %d spam and %d good messages" %\
@@ -321,11 +325,28 @@ class ClassifierData:
         self.Load()
 
 def GetStorageManagerClass():
-    return [PickleStorageManager, DBStorageManager][use_db]
+    # We used to enforce this so that all binary users used bsddb, and
+    # unless they modified the source, so would all source users.  We
+    # would like more flexibility now, so we match what the rest of the
+    # applications do - this isn't exposed via the GUI, so Outlook users
+    # still get bsddb by default, and have to fiddle with a text file
+    # to change that.
+    use_db = bayes_options["Storage", "persistent_use_database"]
+    available = {"pickle" : PickleStorageManager,
+                 "dbm"    : DBStorageManager,
+                 "zodb"   : ZODBStorageManager,
+                 }
+    if use_db not in available:
+        # User is trying to use something fancy which isn't available.
+        # Fall back on bsddb.
+        print use_db, "storage type not available.  Using bsddb."
+        use_db = "dbm"
+    return available[use_db]
 
 # Our main "bayes manager"
 class BayesManager:
     def __init__(self, config_base="default", outlook=None, verbose=0):
+        self.owner_thread_ident = thread.get_ident() # check we aren't multi-threaded
         self.never_configured = True
         self.reported_error_map = {}
         self.reported_startup_error = False
@@ -335,10 +356,18 @@ class BayesManager:
         self.outlook = outlook
         self.dialog_parser = None
         self.test_suite_running = False
+        self.received_ham = self.received_unsure = self.received_spam = 0
+        self.notify_timer_id = None
 
         import_early_core_spambayes_stuff()
 
         self.application_directory = os.path.dirname(this_filename)
+
+        # Load the environment for translation.
+        lang_manager = bayes_i18n.LanguageManager()
+        # Set the system user default language.
+        lang_manager.set_language(lang_manager.locale_default_lang())
+
         # where windows would like our data stored (and where
         # we do, unless overwritten via a config file)
         self.windows_data_directory = self.LocateDataDirectory()
@@ -358,7 +387,7 @@ class BayesManager:
                 value = value.decode(filesystem_encoding)
             except AttributeError: # May already be Unicode
                 pass
-            assert type(value) == type(u''), "%r should be a unicode" % value
+            assert isinstance(value, types.UnicodeType), "%r should be a unicode" % value
             try:
                 if not os.path.isdir(value):
                     os.makedirs(value)
@@ -374,10 +403,6 @@ class BayesManager:
         else:
             self.data_directory = self.windows_data_directory
 
-        # Now we have the data directory, migrate anything needed, and load
-        # any config from it.
-        self.MigrateDataDirectory()
-
         # Get the message store before loading config, as we use the profile
         # name.
         self.message_store = msgstore.MAPIMsgStore(outlook)
@@ -387,14 +412,31 @@ class BayesManager:
         # default_bayes_customize.ini in the app directory and user data
         # directory (version 0.8 and earlier, we copied the app one to the
         # user dir - that was a mistake - but supporting a version in that
-        # directory wasn't).
+        # directory wasn't).  We also look for a
+        # {outlook-profile-name}_bayes_customize.ini file in the data
+        # directory, to allow per-profile customisations.
         bayes_option_filenames = []
         # data dir last so options there win.
         for look_dir in [self.application_directory, self.data_directory]:
             look_file = os.path.join(look_dir, "default_bayes_customize.ini")
             if os.path.isfile(look_file):
                 bayes_option_filenames.append(look_file)
+        look_file = os.path.join(self.data_directory,
+                                 self.GetProfileName() + \
+                                 "_bayes_customize.ini")
+        if os.path.isfile(look_file):
+            bayes_option_filenames.append(look_file)
         import_core_spambayes_stuff(bayes_option_filenames)
+
+        # Set interface to use the user language in configuration file.
+        for language in bayes_options["globals", "language"][::-1]:
+            # We leave the default in there as the last option, to fall
+            # back on if necessary.
+            lang_manager.add_language(language)
+        self.LogDebug(1, "Asked to add languages: " + \
+                      ", ".join(bayes_options["globals", "language"]))
+        self.LogDebug(1, "Set language to " + \
+                      str(lang_manager.current_langs_codes))
 
         bayes_base = os.path.join(self.data_directory, "default_bayes_database")
         mdb_base = os.path.join(self.data_directory, "default_message_database")
@@ -402,24 +444,27 @@ class BayesManager:
         ManagerClass = GetStorageManagerClass()
         db_manager = ManagerClass(bayes_base, mdb_base)
         self.classifier_data = ClassifierData(db_manager, self)
-        self.LoadBayes()
-        self.stats = oastats.Stats(self.config)
-
-    # "old" bayes functions - new code should use "classifier_data" directly
-    def LoadBayes(self):
         try:
             self.classifier_data.Load()
         except:
             self.ReportFatalStartupError("Failed to load bayes database")
             self.classifier_data.InitNew()
+        self.bayes_options = bayes_options
+        self.bayes_message = bayes_message
+        bayes_options["Categorization", "spam_cutoff"] = \
+                                        self.config.filter.spam_threshold \
+                                        / 100.0
+        bayes_options["Categorization", "ham_cutoff"] = \
+                                        self.config.filter.unsure_threshold \
+                                        / 100.0
+        self.stats = bayes_stats.Stats(bayes_options,
+                                       self.classifier_data.message_db)
 
-    def InitNewBayes(self):
-        self.classifier_data.InitNew()
-    def SaveBayes(self):
-        self.classifier_data.Save()
-    def SaveBayesPostIncrementalTrain(self):
-        self.classifier_data.SavePostIncrementalTrain()
-    # Logging - this too should be somewhere else.
+    def AdoptClassifierData(self, new_classifier_data):
+        self.classifier_data.Adopt(new_classifier_data)
+        self.stats.messageinfo_db = self.classifier_data.message_db
+
+    # Logging - this should be somewhere else.
     def LogDebug(self, level, *args):
         if self.verbose >= level:
             for arg in args[:-1]:
@@ -449,11 +494,11 @@ class BayesManager:
     def ReportFatalStartupError(self, message):
         if not self.reported_startup_error:
             self.reported_startup_error = True
-            full_message = \
+            full_message = _(\
                 "There was an error initializing the Spam plugin.\r\n\r\n" \
                 "Spam filtering has been disabled.  Please re-configure\r\n" \
                 "and re-enable this plugin\r\n\r\n" \
-                "Error details:\r\n" + message
+                "Error details:\r\n") + message
             # Disable the plugin
             if self.config is not None:
                 self.config.filter.enabled = False
@@ -504,31 +549,6 @@ class BayesManager:
             # Can't make the directory.
             return self.application_directory
 
-    def MigrateDataDirectory(self):
-        # A bit of a nod to save people doing a full retrain.
-        # Try and locate our files in the old location, and move
-        # them to the new one.
-        # Note that this is migrating data for very old versions of the
-        # plugin (before the first decent binary!).  The next time it is
-        # touched it can die :)
-        self._MigrateFile("default_bayes_database.pck")
-        self._MigrateFile("default_bayes_database.db")
-        self._MigrateFile("default_message_database.pck")
-        self._MigrateFile("default_message_database.db")
-        self._MigrateFile("default_configuration.pck")
-
-    # Copy a file from the application_directory to the data_directory.
-    # By default (do_move not specified), the source file is deleted.
-    # Pass do_move=False to leave the original file.
-    def _MigrateFile(self, filename):
-        src = os.path.join(self.application_directory, filename)
-        dest = os.path.join(self.data_directory, filename)
-        if os.path.isfile(src) and not os.path.isfile(dest):
-            # shutil in 2.2 and earlier don't contain 'move'.
-            # Win95 and Win98 don't support MoveFileEx.
-            shutil.copyfile(src, dest)
-            os.remove(src)
-
     def FormatFolderNames(self, folder_ids, include_sub):
         names = []
         for eid in folder_ids:
@@ -568,7 +588,7 @@ class BayesManager:
 
         # Regarding the property type:
         # We originally wanted to use the "Integer" Outlook field,
-        # but it seems this property type alone is not expose via the Object
+        # but it seems this property type alone is not exposed via the Object
         # model.  So we resort to olPercent, and live with the % sign
         # (which really is OK!)
         assert self.outlook is not None, "I need outlook :("
@@ -639,16 +659,12 @@ class BayesManager:
         try:
             self.options.merge_file(filename)
         except:
-            msg = "The configuration file named below is invalid.\r\n" \
+            msg = _("The configuration file named below is invalid.\r\n" \
                     "Please either correct or remove this file\r\n\r\n" \
-                    "Filename: " + filename
+                    "Filename: ") + filename
             self.ReportError(msg)
 
-    def LoadConfig(self):
-        # Insist on english numeric conventions in config file.
-        # See addin.py, and [725466] Include a proper locale fix in Options.py
-        import locale; locale.setlocale(locale.LC_NUMERIC, "C")
-
+    def GetProfileName(self):
         profile_name = self.message_store.GetProfileName()
         # The profile name may include characters invalid in file names.
         if profile_name is not None:
@@ -662,16 +678,13 @@ class BayesManager:
             print "* SpamBayes, and running a win32all version pre 154."
             print "* If you work with multiple Outlook profiles, it is recommended"
             print "* you upgrade - see http://starship.python.net/crew/mhammond"""
-        else:
-            # xxx - remove me sometime - win32all grew this post 154(ish)
-            # binary never released with this, so we can be a little more brutal
-            # Try and rename to current profile, silent failure
-            try:
-                os.rename(os.path.join(self.data_directory, "unknown_profile.ini"),
-                          os.path.join(self.data_directory, profile_name + ".ini"))
-            except os.error:
-                pass
+        return profile_name
 
+    def LoadConfig(self):
+        # Insist on English numeric conventions in config file.
+        # See addin.py, and [725466] Include a proper locale fix in Options.py
+        import locale; locale.setlocale(locale.LC_NUMERIC, "C")
+        profile_name = self.GetProfileName()
         self.config_filename = os.path.join(self.data_directory, profile_name + ".ini")
         self.never_configured = not os.path.exists(self.config_filename)
         # Now load it up
@@ -709,10 +722,10 @@ class BayesManager:
             except:
                 print "FAILED to load old pickle"
                 traceback.print_exc()
-                msg = "There was an error loading your old\r\n" \
-                      "SpamBayes configuration file.\r\n\r\n" \
-                      "It is likely that you will need to re-configure\r\n" \
-                      "SpamBayes before it will function correctly."
+                msg = _("There was an error loading your old\r\n" \
+                        "SpamBayes configuration file.\r\n\r\n" \
+                        "It is likely that you will need to re-configure\r\n" \
+                        "SpamBayes before it will function correctly.")
                 self.ReportError(msg)
                 # But we can't abort yet - we really should still try and
                 # delete it, as we aren't gunna work next time in this case!
@@ -738,10 +751,10 @@ class BayesManager:
             self.LogDebug(1, "pickle migration removing '%s'" % pickle_filename)
             os.remove(pickle_filename)
         except os.error:
-            msg = "There was an error migrating and removing your old\r\n" \
-                  "SpamBayes configuration file.  Configuration changes\r\n" \
-                  "you make are unlikely to be reflected next\r\n" \
-                  "time you start Outlook.  Please try rebooting."
+            msg = _("There was an error migrating and removing your old\r\n" \
+                    "SpamBayes configuration file.  Configuration changes\r\n" \
+                    "you make are unlikely to be reflected next\r\n" \
+                    "time you start Outlook.  Please try rebooting.")
             self.ReportError(msg)
 
 
@@ -775,6 +788,7 @@ class BayesManager:
 
     def Close(self):
         global _mgr
+        self._KillNotifyTimer()
         self.classifier_data.Close()
         self.config = self.options = None
         if self.message_store is not None:
@@ -803,9 +817,9 @@ class BayesManager:
         except AssertionError:
             # See bug 706520 assert fails in classifier
             # For now, just tell the user.
-            msg = "It appears your SpamBayes training database is corrupt.\r\n\r\n" \
-                  "We are working on solving this, but unfortunately you\r\n" \
-                  "must re-train the system via the SpamBayes manager."
+            msg = _("It appears your SpamBayes training database is corrupt.\r\n\r\n" \
+                    "We are working on solving this, but unfortunately you\r\n" \
+                    "must re-train the system via the SpamBayes manager.")
             self.ReportErrorOnce(msg)
             # and disable the addin, as we are hosed!
             self.config.filter.enabled = False
@@ -818,13 +832,13 @@ class BayesManager:
         config = self.config.filter
         ok_to_enable = operator.truth(config.watch_folder_ids)
         if not ok_to_enable:
-            return "You must define folders to watch for new messages.  " \
-                   "Select the 'Filtering' tab to define these folders."
+            return _("You must define folders to watch for new messages.  " \
+                     "Select the 'Filtering' tab to define these folders.")
 
         ok_to_enable = operator.truth(config.spam_folder_id)
         if not ok_to_enable:
-            return "You must define the folder to receive your certain spam.  " \
-                   "Select the 'Filtering' tab to define this folders."
+            return _("You must define the folder to receive your certain spam.  " \
+                     "Select the 'Filtering' tab to define this folder.")
 
         # Check that the user hasn't selected the same folder as both
         # 'Spam' or 'Unsure', and 'Watch' - this would confuse us greatly.
@@ -834,25 +848,25 @@ class BayesManager:
             try:
                 unsure_folder = ms.GetFolder(config.unsure_folder_id)
             except ms.MsgStoreException, details:
-                return "The unsure folder is invalid: %s" % (details,)
+                return _("The unsure folder is invalid: %s") % (details,)
         try:
             spam_folder = ms.GetFolder(config.spam_folder_id)
         except ms.MsgStoreException, details:
-            return "The spam folder is invalid: %s" % (details,)
+            return _("The spam folder is invalid: %s") % (details,)
         if ok_to_enable:
             for folder in ms.GetFolderGenerator(config.watch_folder_ids,
                                                 config.watch_include_sub):
                 bad_folder_type = None
                 if unsure_folder is not None and unsure_folder == folder:
-                    bad_folder_type = "unsure"
+                    bad_folder_type = _("unsure")
                     bad_folder_name = unsure_folder.GetFQName()
                 if spam_folder == folder:
-                    bad_folder_type = "spam"
+                    bad_folder_type = _("spam")
                     bad_folder_name = spam_folder.GetFQName()
                 if bad_folder_type is not None:
-                    return "You can not specify folder '%s' as both the " \
-                           "%s folder, and as being watched." \
-                           % (bad_folder_name, bad_folder_type)
+                    return _("You can not specify folder '%s' as both the " \
+                             "%s folder, and as being watched.") \
+                             % (bad_folder_name, bad_folder_type)
         return None
 
     def ShowManager(self):
@@ -860,6 +874,14 @@ class BayesManager:
         dialogs.ShowDialog(0, self, self.config, "IDD_MANAGER")
         # And re-save now, just incase Outlook dies on the way down.
         self.SaveConfig()
+        # And update the cutoff values in bayes_options (which the
+        # stats use) to our thresholds.
+        bayes_options["Categorization", "spam_cutoff"] = \
+                                        self.config.filter.spam_threshold \
+                                        / 100.0
+        bayes_options["Categorization", "ham_cutoff"] = \
+                                        self.config.filter.unsure_threshold \
+                                        / 100.0
         # And tell the addin that our filters may have changed.
         if self.addin is not None:
             self.addin.FiltersChanged()
@@ -897,6 +919,63 @@ class BayesManager:
         SetWaitCursor(1)
         os.startfile(url)
         SetWaitCursor(0)
+
+    def HandleNotification(self, disposition):
+        if self.config.notification.notify_sound_enabled:
+            if disposition == "Yes":
+                self.received_spam += 1
+            elif disposition == "No":
+                self.received_ham += 1
+            else:
+                self.received_unsure += 1
+            self._StartNotifyTimer()
+        
+    def _StartNotifyTimer(self):
+        # First kill any existing timer
+        self._KillNotifyTimer()
+        # And start a new timer.
+        delay = self.config.notification.notify_accumulate_delay
+        self._DoStartNotifyTimer(delay)
+        
+    def _DoStartNotifyTimer(self, delay):
+        assert thread.get_ident() == self.owner_thread_ident
+        assert self.notify_timer_id is None, "Shouldn't start a timer when already have one"
+        assert isinstance(delay, types.FloatType), "Timer values are float seconds"
+        # And start a new timer.
+        assert delay, "No delay means no timer!"
+        delay = int(delay*1000) # convert to ms.
+        self.notify_timer_id = timer.set_timer(delay, self._NotifyTimerFunc)
+        self.LogDebug(1, "Notify timer started - id=%d, delay=%d" % (self.notify_timer_id, delay))
+        
+    def _KillNotifyTimer(self):
+        assert thread.get_ident() == self.owner_thread_ident
+        if self.notify_timer_id is not None:
+            timer.kill_timer(self.notify_timer_id)
+            self.LogDebug(2, "The notify timer with id=%d was stopped" % self.notify_timer_id)
+            self.notify_timer_id = None
+        
+    def _NotifyTimerFunc(self, event, time):
+        # Kill the timer first
+        assert thread.get_ident() == self.owner_thread_ident
+        self.LogDebug(1, "The notify timer with id=%s fired" % self.notify_timer_id)
+        self._KillNotifyTimer()
+        
+        import winsound
+        config = self.config.notification
+        sound_opts = winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NOSTOP | winsound.SND_NODEFAULT
+        self.LogDebug(3, "Notify received ham=%d, unsure=%d, spam=%d" %
+                      (self.received_ham, self.received_unsure, self.received_spam))
+        if self.received_ham > 0 and len(config.notify_ham_sound) > 0:
+            self.LogDebug(3, "Playing ham sound '%s'" % config.notify_ham_sound)
+            winsound.PlaySound(config.notify_ham_sound, sound_opts)
+        elif self.received_unsure > 0 and len(config.notify_unsure_sound) > 0:
+            self.LogDebug(3, "Playing unsure sound '%s'" % config.notify_unsure_sound)
+            winsound.PlaySound(config.notify_unsure_sound, sound_opts)
+        elif self.received_spam > 0 and len(config.notify_spam_sound) > 0:
+            self.LogDebug(3, "Playing spam sound '%s'" % config.notify_spam_sound)
+            winsound.PlaySound(config.notify_spam_sound, sound_opts)
+        # Reset received counts to zero after notify.
+        self.received_ham = self.received_unsure = self.received_spam = 0
 
 _mgr = None
 

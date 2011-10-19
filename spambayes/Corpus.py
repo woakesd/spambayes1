@@ -72,26 +72,18 @@ To Do:
 
 '''
 
-# This module is part of the spambayes project, which is Copyright 2002-3
+# This module is part of the spambayes project, which is Copyright 2002-2007
 # The Python Software Foundation and is covered by the Python Software
 # Foundation license.
+
+from __future__ import generators
 
 __author__ = "Tim Stone <tim@fourstonesExpressions.com>"
 __credits__ = "Richie Hindle, Tim Peters, all the spambayes contributors."
 
-from __future__ import generators
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-    def bool(val):
-        return not not val
-
 import sys           # for output of docstring
 import time
-import types
+
 from spambayes.Options import options
 
 SPAM = True
@@ -137,7 +129,7 @@ class Corpus:
         '''Remove a Message from this corpus'''
         key = message.key()
         if options["globals", "verbose"]:
-            print 'removing message %s from corpus' % (key)
+            print 'removing message %s from corpus' % (key,)
         self.unCacheMessage(key)
         del self.msgs[key]
 
@@ -152,7 +144,7 @@ class Corpus:
         key = message.key()
 
         if options["globals", "verbose"]:
-            print 'placing %s in corpus cache' % (key)
+            print 'placing %s in corpus cache' % (key,)
 
         self.msgs[key] = message
 
@@ -169,7 +161,7 @@ class Corpus:
         # This method should probably not be overridden
 
         if options["globals", "verbose"]:
-            print 'Flushing %s from corpus cache' % (key)
+            print 'Flushing %s from corpus cache' % (key,)
 
         try:
             ki = self.keysInMemory.index(key)
@@ -184,32 +176,8 @@ class Corpus:
         '''Move a Message from another corpus to this corpus'''
         msg = fromcorpus[key]
         msg.load() # ensure that the substance has been loaded
-
-        # If the notate_to or notate_subject options are set, then the
-        # message in the cache has this information, and it will get used
-        # in training, which is not ideal.  So if that option is set, strip
-        # that data before training.  The only time I can see this failing
-        # is if the option is changed at some point, so older messages
-        # don't have the notation, but some other program did do the same
-        # notation, which would be lost. This shouldn't be a big deal,
-        # though.
-        if fromCache:
-            for header, header_opt in (("Subject", "notate_subject"),
-                                       ("To", "notate_to")):
-                # For Python 2.2, which doesn't allow "string in string".
-                if isinstance(options["Headers", header_opt],
-                              types.StringTypes):
-                    notate_opt = (options["Headers", header_opt],)
-                else:
-                    notate_opt = options["Headers", header_opt]
-
-                for opt, tag in (("ham", "header_ham_string"),
-                                 ("spam", "header_spam_string"),
-                                 ("unsure", "header_unsure_string")):
-                    if opt in notate_opt and msg[header] is not None and \
-                       msg[header].startswith("%s," % options["Headers", tag]):
-                        msg.replace_header(header, msg[header][len(tag)+1:])
-
+        # Remove needs to be first, because add changes the directory
+        # of the message, and so remove won't work then.
         fromcorpus.removeMessage(msg)
         self.addMessage(msg)
 
@@ -221,7 +189,10 @@ class Corpus:
 
     def __getitem__(self, key):
         '''Corpus is a dictionary'''
-        amsg = self.msgs.get(key)
+        amsg = self.msgs.get(key, "")
+
+        if amsg == "":
+            raise KeyError(key)
 
         if amsg is None:
             amsg = self.makeMessage(key)     # lazy init, saves memory
@@ -233,13 +204,13 @@ class Corpus:
         '''Message keys in the Corpus'''
         return self.msgs.keys()
 
+    def __contains__(self, other):
+        return other in self.msgs.values()
+
     def __iter__(self):
         '''Corpus is iterable'''
         for key in self.keys():
-            try:
-                yield self[key]
-            except KeyError:
-                pass
+            yield self[key]
 
     def __str__(self):
         '''Instance as a printable string'''
@@ -249,11 +220,11 @@ class Corpus:
         '''Instance as a representative string'''
         raise NotImplementedError
 
-    def makeMessage(self, key):
+    def makeMessage(self, key, content=None):
         '''Call the factory to make a message'''
 
         # This method will likely be overridden
-        msg = self.factory.create(key)
+        msg = self.factory.create(key, content)
 
         return msg
 
@@ -262,31 +233,39 @@ class ExpiryCorpus:
     '''Mixin Class - Corpus of "young" file system artifacts'''
 
     def __init__(self, expireBefore):
-        '''Constructor'''
         self.expireBefore = expireBefore
+        # Only check for expiry after this time.
+        self.expiry_due = time.time()
 
     def removeExpiredMessages(self):
         '''Kill expired messages'''
+        
+        # Only check for expired messages after this time.  We set this to the
+        # closest-to-expiry message's expiry time, so that this method can be
+        # called very regularly, and most of the time it will just immediately
+        # return.
+        if time.time() < self.expiry_due:
+            return
 
-        for msg in self:
-            if msg.createTimestamp() < time.time() - self.expireBefore:
+        self.expiry_due = time.time() + self.expireBefore
+        for key in self.keys()[:]:
+            msg = self[key]
+            timestamp = msg.createTimestamp()
+            if timestamp < time.time() - self.expireBefore:
                 if options["globals", "verbose"]:
-                    print 'message %s has expired' % (msg.key())
+                    print 'message %s has expired' % (msg.key(),)
                 from spambayes.storage import NO_TRAINING_FLAG
                 self.removeMessage(msg, observer_flags=NO_TRAINING_FLAG)
+            elif timestamp + self.expireBefore < self.expiry_due:
+                self.expiry_due = timestamp + self.expireBefore
 
 
-class MessageFactory:
+class MessageFactory(object):
     '''Abstract Message Factory'''
-
-    def __init__(self):
-        '''Constructor()'''
-        pass
-
-    def create(self, key):
+    def create(self, key, content=None):
         '''Create a message instance'''
         raise NotImplementedError
 
 
 if __name__ == '__main__':
-    print >>sys.stderr, __doc__
+    print >> sys.stderr, __doc__

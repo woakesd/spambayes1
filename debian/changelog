@@ -1,3 +1,12 @@
+spambayes (1.1a6-1) unstable; urgency=low
+
+  * new upstream release (closes: #586802)
+  * update to modern packaging style, with dh_python2
+    - rebuild with python2.7 (closes: #427126)
+  * remove sb_notesfilter which only runs on Windows (closes: #593977)
+
+ -- Alexandre Fayolle <afayolle@debian.org>  Wed, 19 Oct 2011 08:32:06 +0200
+
 spambayes (1.0.4-6) unstable; urgency=low
 
   * acknowledge NMU (closes:  #484442)

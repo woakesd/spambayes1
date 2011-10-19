@@ -21,18 +21,12 @@ To do:
  o Suggestions?
 """
 
-# This module is part of the spambayes project, which is Copyright 2002-3
+# This module is part of the spambayes project, which is Copyright 2002-2007
 # The Python Software Foundation and is covered by the Python Software
 # Foundation license.
 
 __author__ = "Tony Meyer <ta-meyer@ihug.co.nz>"
 __credits__ = "All the Spambayes folk."
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
 
 from spambayes import UserInterface
 from spambayes.Options import options

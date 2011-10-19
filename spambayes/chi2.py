@@ -1,11 +1,5 @@
 import math as _math
-
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-
+import random
 
 def chi2Q(x2, v, exp=_math.exp, min=min):
     """Return prob(chisq >= x2, with v degrees of freedom).
@@ -106,7 +100,7 @@ def main():
         def __init__(self, baserandom=random.random, tabsize=513):
             self.baserandom = baserandom
             self.n = tabsize
-            self.tab = [baserandom() for i in range(tabsize)]
+            self.tab = [baserandom() for _i in range(tabsize)]
             self.next = baserandom()
 
         def random(self):
@@ -150,8 +144,8 @@ def main():
     s = Hist(20, lo=0.0, hi=1.0)
     score = Hist(20, lo=0.0, hi=1.0)
 
-    for i in range(5000):
-        ps = [random() for j in range(50)]
+    for _i in xrange(5000):
+        ps = [random() for _j in xrange(50)]
         s1, h1, score1 = judge(ps + [bias] * warp)
         s.add(s1)
         h.add(h1)
@@ -203,5 +197,4 @@ def showscore(ps, ln=_math.log, ln2=_math.log(2), frexp=_math.frexp):
     print "(S-H+1)/2", score
 
 if __name__ == '__main__':
-    import random
     main()

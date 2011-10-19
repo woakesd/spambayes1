@@ -4,27 +4,21 @@
 # October, 2002
 # Copyright PSF, license under the PSF license
 
+import sys
 import traceback
 from win32com.mapi import mapi
 
-try:
-    True, False
-except NameError:
-    # Maintain compatibility with Python 2.2
-    True, False = 1, 0
-
-
 # Note our Message Database uses PR_SEARCH_KEY, *not* PR_ENTRYID, as the
 # latter changes after a Move operation - see msgstore.py
-def been_trained_as_ham(msg, cdata):
-    if not cdata.message_db.has_key(msg.searchkey):
+def been_trained_as_ham(msg):
+    if msg.t is None:
         return False
-    return cdata.message_db[msg.searchkey]=='0'
+    return msg.t == False
 
-def been_trained_as_spam(msg, cdata):
-    if not cdata.message_db.has_key(msg.searchkey):
+def been_trained_as_spam(msg):
+    if msg.t is None:
         return False
-    return cdata.message_db[msg.searchkey]=='1'
+    return msg.t == True
 
 def train_message(msg, is_spam, cdata):
     # Train an individual message.
@@ -35,10 +29,8 @@ def train_message(msg, is_spam, cdata):
     # be written to the message (so the user can see some effects)
     from spambayes.tokenizer import tokenize
 
-    if not cdata.message_db.has_key(msg.searchkey):
-        was_spam = None
-    else:
-        was_spam = cdata.message_db[msg.searchkey]=='1'
+    cdata.message_db.load_msg(msg)
+    was_spam = msg.t
     if was_spam == is_spam:
         return False    # already correctly classified
 
@@ -50,7 +42,8 @@ def train_message(msg, is_spam, cdata):
 
     # Learn the correct classification.
     cdata.bayes.learn(tokenize(stream), is_spam)
-    cdata.message_db[msg.searchkey] = ['0', '1'][is_spam]
+    msg.t = is_spam
+    cdata.message_db.store_msg(msg)
     cdata.dirty = True
     return True
 
@@ -61,16 +54,17 @@ def train_message(msg, is_spam, cdata):
 def untrain_message(msg, cdata):
     from spambayes.tokenizer import tokenize
     stream = msg.GetEmailPackageObject()
-    if been_trained_as_spam(msg, cdata):
-        assert not been_trained_as_ham(msg, cdata), "Can't have been both!"
+    cdata.message_db.load_msg(msg)
+    if been_trained_as_spam(msg):
+        assert not been_trained_as_ham(msg), "Can't have been both!"
         cdata.bayes.unlearn(tokenize(stream), True)
-        del cdata.message_db[msg.searchkey]
+        cdata.message_db.remove_msg(msg)
         cdata.dirty = True
         return True
-    if been_trained_as_ham(msg, cdata):
-        assert not been_trained_as_spam(msg, cdata), "Can't have been both!"
+    if been_trained_as_ham(msg):
+        assert not been_trained_as_spam(msg), "Can't have been both!"
         cdata.bayes.unlearn(tokenize(stream), False)
-        del cdata.message_db[msg.searchkey]
+        cdata.message_db.remove_msg(msg)
         cdata.dirty = True
         return False
     return None
@@ -92,7 +86,7 @@ def train_folder(f, isspam, cdata, progress):
 
 
 def real_trainer(classifier_data, config, message_store, progress):
-    progress.set_status("Counting messages")
+    progress.set_status(_("Counting messages"))
 
     num_msgs = 0
     for f in message_store.GetFolderGenerator(config.training.ham_folder_ids, config.training.ham_include_sub):
@@ -103,13 +97,13 @@ def real_trainer(classifier_data, config, message_store, progress):
     progress.set_max_ticks(num_msgs+3)
 
     for f in message_store.GetFolderGenerator(config.training.ham_folder_ids, config.training.ham_include_sub):
-        progress.set_status("Processing good folder '%s'" % (f.name,))
+        progress.set_status(_("Processing good folder '%s'") % (f.name,))
         train_folder(f, 0, classifier_data, progress)
         if progress.stop_requested():
             return
 
     for f in message_store.GetFolderGenerator(config.training.spam_folder_ids, config.training.spam_include_sub):
-        progress.set_status("Processing spam folder '%s'" % (f.name,))
+        progress.set_status(_("Processing spam folder '%s'") % (f.name,))
         train_folder(f, 1, classifier_data, progress)
         if progress.stop_requested():
             return
@@ -120,7 +114,7 @@ def real_trainer(classifier_data, config, message_store, progress):
     # Completed training - save the database
     # Setup the next "stage" in the progress dialog.
     progress.set_max_ticks(1)
-    progress.set_status("Writing the database...")
+    progress.set_status(_("Writing the database..."))
     classifier_data.Save()
 
 # Called back from the dialog to do the actual training.
@@ -128,8 +122,8 @@ def trainer(mgr, config, progress):
     rebuild = config.training.rebuild
     rescore = config.training.rescore
 
-    if not config.training.ham_folder_ids or not config.training.spam_folder_ids:
-        progress.error("You must specify at least one spam, and one good folder")
+    if not config.training.ham_folder_ids and not config.training.spam_folder_ids:
+        progress.error(_("You must specify at least one spam or one good folder"))
         return
 
     if rebuild:
@@ -150,13 +144,13 @@ def trainer(mgr, config, progress):
         classifier_data = mgr.classifier_data
 
     # We do this in possibly 3 stages - train, filter, save
-    # re-scoring is much slower and training (as we actually have to save
+    # re-scoring is much slower than training (as we actually have to save
     # the message back.)
     # Saving is really slow sometimes, but we only have 1 tick for that anyway
     if rescore:
-        stages = ("Training", .3), ("Saving", .1), ("Scoring", .6)
+        stages = (_("Training"), .3), (_("Saving"), .1), (_("Scoring"), .6)
     else:
-        stages = ("Training", .9), ("Saving", .1)
+        stages = (_("Training"), .9), (_("Saving"), .1)
     progress.set_stages(stages)
 
     real_trainer(classifier_data, config, mgr.message_store, progress)
@@ -166,8 +160,15 @@ def trainer(mgr, config, progress):
 
     if rebuild:
         assert mgr.classifier_data is not classifier_data
-        mgr.classifier_data.Adopt(classifier_data)
+        mgr.AdoptClassifierData(classifier_data)
         classifier_data = mgr.classifier_data
+        # If we are rebuilding, then we reset the statistics, too.
+        # (But output them to the log for reference).
+        mgr.LogDebug(1, "Session:" + "\r\n".join(\
+            mgr.stats.GetStats(session_only=True)))
+        mgr.LogDebug(1, "Total:" + "\r\n".join(mgr.stats.GetStats()))
+        mgr.stats.Reset()
+        mgr.stats.ResetTotal(permanently=True)
 
     progress.tick()
 
@@ -183,7 +184,8 @@ def trainer(mgr, config, progress):
         filter.filterer(mgr, mgr.config, progress)
 
     bayes = classifier_data.bayes
-    progress.set_status("Completed training with %d spam and %d good messages" % (bayes.nspam, bayes.nham))
+    progress.set_status(_("Completed training with %d spam and %d good messages") % (bayes.nspam, bayes.nham))
+
 
 def main():
     print "Sorry - we don't do anything here any more"
