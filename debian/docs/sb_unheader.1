@@ -1,0 +1,26 @@
+.TH SB_UNHEADER "1" "June 2014" "sb_unheader" "User Commands"
+.SH NAME
+sb_unheader - cleans headers from email messages.
+.SH DESCRIPTION
+usage: unheader.py [ \fB\-p\fR pat ... ] [ \fB\-s\fR ] folder
+\fB\-p\fR pat gives a regex pattern used to eliminate unwanted headers
+\&'\-p pat' may be given multiple times
+\fB\-s\fR tells not to remove SpamAssassin headers
+\fB\-d\fR means treat folder as a Maildir
+.PP
+\fB\-p\fR pat gives a regex pattern used to eliminate unwanted headers
+\&'\-p pat' may be given multiple times
+\fB\-s\fR tells not to remove SpamAssassin headers
+\fB\-d\fR means treat folder as a Maildir
+.SH "SEE ALSO"
+The full documentation for
+.B usage:
+is maintained as a Texinfo manual.  If the
+.B info
+and
+.B usage:
+programs are properly installed at your site, the command
+.IP
+.B info usage:
+.PP
+should give you access to the complete manual.

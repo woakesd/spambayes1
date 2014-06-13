@@ -1,0 +1,14 @@
+Fixes an error when importing asyncore and asynchat.
+Index: spambayes-1.1b1/spambayes/Dibbler.py
+===================================================================
+--- spambayes-1.1b1.orig/spambayes/Dibbler.py	2011-01-22 16:15:06.000000000 +0100
++++ spambayes-1.1b1/spambayes/Dibbler.py	2014-06-13 13:17:48.798261574 +0200
+@@ -183,7 +183,7 @@
+     RSTRIP_CHARS_AVAILABLE = True
+ 
+ from spambayes.port import md5
+-from spambayes import asyncore, asynchat
++import asyncore, asynchat
+ 
+ class BrighterAsyncChat(asynchat.async_chat):
+     """An asynchat.async_chat that doesn't give spurious warnings on

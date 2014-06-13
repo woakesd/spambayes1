@@ -1,0 +1,53 @@
+.TH SB_BNSERVER "1" "June 2014" "sb_bnserver" "User Commands"
+.SH NAME
+sb_bnserver - Another server version of hammie.py
+.SH SYNOPSIS
+This is not intended to be run manually, it is the opportunistic daemon backend of sb_bnfilter.
+.B %(program)s
+[\fIoptions\fR] \fIFILE\fR
+.SH DESCRIPTION
+Usage: %(program)s [options] FILE
+.SS "Where:"
+.HP
+\fB\-h\fR
+.IP
+show usage and exit
+.HP
+\fB\-p\fR FILE
+.TP
+use pickle FILE as the persistent store.
+loads data from this file
+.IP
+if it exists, and saves data to this file at the end.
+.HP
+\fB\-d\fR FILE
+.IP
+use DBM store FILE as the persistent store.
+.HP
+\fB\-o\fR section:option:value
+.IP
+set [section, option] in the options database to value
+.HP
+\fB\-a\fR seconds
+.IP
+timeout in seconds between requests before this server terminates
+.HP
+\fB\-A\fR number
+.IP
+terminate this server after this many requests
+.IP
+FILE
+.IP
+unix domain socket used on which we listen
+.SH "SEE ALSO"
+The full documentation for
+.B option
+is maintained as a Texinfo manual.  If the
+.B info
+and
+.B option
+programs are properly installed at your site, the command
+.IP
+.B info option
+.PP
+should give you access to the complete manual.

@@ -1,0 +1,25 @@
+.TH SB_MAILSORT "1" "June 2014" "sb_mailsort" "User Commands"
+.SH NAME
+sb_mailsort - an email sorter 
+.SH DESCRIPTION
+.SS "To train:"
+.IP
+/usr/bin/sb_mailsort \fB\-t\fR ham.mbox spam.mbox
+.SS "To filter mail (using .forward or .qmail):"
+.IP
+|/usr/bin/sb_mailsort Maildir/ Mail/Spam/
+.SS "To print the score and top evidence for a message or messages:"
+.IP
+/usr/bin/sb_mailsort \fB\-s\fR message [message ...]
+.SH "SEE ALSO"
+The full documentation for
+.B option
+is maintained as a Texinfo manual.  If the
+.B info
+and
+.B option
+programs are properly installed at your site, the command
+.IP
+.B info option
+.PP
+should give you access to the complete manual.

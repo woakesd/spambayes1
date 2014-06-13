@@ -1,6 +1,8 @@
 This package was debianized by Alexandre Fayolle <alexandre.fayolle@logilab.fr>
 on Thu,  5 Feb 2004 19:03:49 +0100. 
 
+It was adopted by Hugo Lefeuvre <hugo6390@orange.fr> on Fri, 13 Jun 2014 11:06:32 +0100. 
+
 The original source is available at http://spambayes.sf.net/
 
 Copyright (C) 2002-2003 Python Software Foundation; All Rights Reserved

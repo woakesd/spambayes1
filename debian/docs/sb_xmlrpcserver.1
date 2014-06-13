@@ -1,0 +1,48 @@
+.TH SB_XMLRPCSERVER "1" "June 2014" "sb_xmlrpcserver" "User Commands"
+.SH NAME
+sb_xmlrpcserver - A server version of hammie.py. 
+.SH SYNOPSIS
+.B %(program)s
+[\fIoptions\fR] \fIIP:PORT\fR
+.SH DESCRIPTION
+Usage: %(program)s [options] IP:PORT
+.SS "Where:"
+.HP
+\fB\-h\fR
+.IP
+show usage and exit
+.HP
+\fB\-p\fR FILE
+.TP
+use pickle FILE as the persistent store.
+loads data from this file
+.IP
+if it exists, and saves data to this file at the end.
+.HP
+\fB\-d\fR FILE
+.IP
+use DBM store FILE as the persistent store.
+.HP
+\fB\-o\fR section:option:value
+.IP
+set [section, option] in the options database to value
+.IP
+IP
+.IP
+IP address to bind (use 0.0.0.0 to listen on all IPs of this machine)
+.IP
+PORT
+.IP
+Port number to listen to.
+.SH "SEE ALSO"
+The full documentation for
+.B option
+is maintained as a Texinfo manual.  If the
+.B info
+and
+.B option
+programs are properly installed at your site, the command
+.IP
+.B info option
+.PP
+should give you access to the complete manual.

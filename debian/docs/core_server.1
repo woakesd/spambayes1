@@ -1,0 +1,55 @@
+.TH CORE_SERVER "1" "June 2014" "core_server" "User Commands"
+.SH NAME
+core_server - The primary server for SpamBayes.
+.SH DESCRIPTION
+Currently serves the web interface only.  Plugging in listeners for various
+protocols is TBD.  This is a first cut at creating a standalone server which
+uses a plugin architecture to support different protocols.  The primary
+motivation is that web apps like MoinMoin, Trac and Roundup can use spam
+detection, but they don't necessarily provide the mechanisms necessary to
+save ham and spam databases for retraining.  By providing protocol plugins
+you should be able to fairly easily provide (for example) an XML\-RPC
+interface web apps can use.  The core server takes care of all the training
+bells and whistles.
+.PP
+Usage:
+.IP
+core_server.py [options]
+.IP
+options:
+.TP
+\fB\-h\fR
+: Displays this help message.
+.IP
+\fB\-P\fR module :
+.IP
+Identify plugin module to use (required)
+.IP
+\fB\-d\fR FILE : use the named DBM database file
+\fB\-p\fR FILE : the the named Pickle database file
+\fB\-u\fR port : User interface listens on this port number
+.IP
+(default 8880; Browse http://localhost:8880/)
+.TP
+\fB\-b\fR
+: Launch a web browser showing the user interface.
+.IP
+\fB\-o\fR section:option:value :
+.IP
+set [section, option] in the options database
+to value
+.IP
+All command line arguments and switches take their default
+values from the [html_ui] section of bayescustomize.ini.
+.SH "SEE ALSO"
+The full documentation for
+.B option
+is maintained as a Texinfo manual.  If the
+.B info
+and
+.B option
+programs are properly installed at your site, the command
+.IP
+.B info option
+.PP
+should give you access to the complete manual.

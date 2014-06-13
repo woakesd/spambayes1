@@ -1,4 +1,6 @@
-#!/bin/sh -e
+#!/bin/sh 
+
+set -e
 
 # transitional bw compatibility links (1.0.4-6)
 SCRIPTS="sb_xmlrpcserver sb_server sb_bnfilter sb_mailsort \

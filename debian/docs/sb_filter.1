@@ -1,0 +1,110 @@
+.TH SPAMBAYES "1" "June 2014" "SpamBayes Command Line Filter Version 1.1b1 (February, 25, 2011)" "User Commands"
+.SH NAME
+SpamBayes - A hammie front-end to make the simple stuff simple. 
+.SH SYNOPSIS
+.B sb_filter
+[\fIoptions\fR] [\fIfilenames\fR]
+.SH DESCRIPTION
+SpamBayes Command Line Filter Version 1.1b1 (February, 25, 2011)
+.SS "Options can one or more of:"
+.HP
+\fB\-h\fR
+.IP
+show usage and exit
+.HP
+\fB\-v\fR
+.IP
+show version and exit
+.HP
+\fB\-x\fR
+.IP
+show some usage examples and exit
+.HP
+\fB\-d\fR DBFILE
+.IP
+use database in DBFILE
+.HP
+\fB\-p\fR PICKLEFILE
+.IP
+use pickle (instead of database) in PICKLEFILE
+.HP
+\fB\-n\fR
+.IP
+create a new database
+.PP
+*   \fB\-f\fR
+.IP
+filter (default if no processing options are given)
+.PP
+*   \fB\-g\fR
+.IP
+(re)train as a good (ham) message
+.PP
+*   \fB\-s\fR
+.IP
+(re)train as a bad (spam) message
+.PP
+*   \fB\-t\fR
+.IP
+filter and train based on the result \fB\-\-\fR you must
+make sure to untrain all mistakes later.  Not recommended.
+.PP
+*   \fB\-G\fR
+.IP
+untrain ham (only use if you've already trained this message)
+.PP
+*   \fB\-S\fR
+.IP
+untrain spam (only use if you've already trained this message)
+.HP
+\fB\-o\fR section:option:value
+.IP
+set [section, option] in the options database to value
+.HP
+\fB\-P\fR
+.IP
+Run under control of the Python profiler, if it is available
+.PP
+All options marked with '*' operate on stdin, and write the resultant
+message to stdout.
+.PP
+If no filenames are given on the command line, standard input will be
+processed as a single message.  If one or more filenames are given on the
+command line, each will be processed according to the following rules:
+.IP
+* If the filename is '\-', standard input will be processed as a single
+.IP
+message (may only be usefully given once).
+.IP
+* If the filename starts with '+' it will be processed as an MH folder.
+.IP
+* If the filename is a directory and it contains a subdirectory named
+.IP
+\&'cur', it will be processed as a Maildir.
+.IP
+* If the filename is a directory and it contains a subdirectory named
+.IP
+\&'Mail', it will be processed as an MH Mailbox.
+.IP
+* If the filename is a directory and not a Maildir nor an MH Mailbox, it
+.IP
+will be processed as a Mailbox directory consisting of just .txt and
+\&.lorien files.
+.IP
+* Otherwise, the filename is treated as a Unix\-style mailbox (messages
+.IP
+begin on a line starting with 'From ').
+.PP
+Output is always to standard output as a Unix\-style mailbox.
+.SH "SEE ALSO"
+The full documentation for
+.B SpamBayes
+is maintained as a Texinfo manual.  If the
+.B info
+and
+.B SpamBayes
+programs are properly installed at your site, the command
+.IP
+.B info SpamBayes
+.PP
+should give you access to the complete manual.

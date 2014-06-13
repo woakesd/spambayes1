@@ -1,0 +1,76 @@
+.TH SB_MBOXTRAIN "1" "June 2014" "sb_mboxtrain" "User Commands"
+.SH NAME
+sb_mboxtrain - Train spambayes on all previously-untrained messages in a mailbox. 
+.SH SYNOPSIS
+.B sb_mboxtrain
+[\fIOPTIONS\fR] ...
+.SH DESCRIPTION
+Usage: /usr/bin/sb_mboxtrain [OPTIONS] ...
+.SS "Where OPTIONS is one or more of:"
+.HP
+\fB\-h\fR
+.IP
+show usage and exit
+.HP
+\fB\-d\fR DBNAME
+.TP
+use the DBM store.
+A DBM file is larger than the pickle and
+.IP
+creating it is slower, but loading it is much faster,
+especially for large word databases.  Recommended for use with
+sb_filter or any procmail\-based filter.
+.HP
+\fB\-p\fR DBNAME
+.TP
+use the pickle store.
+A pickle is smaller and faster to create,
+.TP
+but much slower to load.
+Recommended for use with sb_server and
+.IP
+sb_xmlrpcserver.
+.HP
+\fB\-g\fR PATH
+.IP
+mbox or directory of known good messages (non\-spam) to train on.
+Can be specified more than once.
+.HP
+\fB\-s\fR PATH
+.IP
+mbox or directory of known spam messages to train on.
+Can be specified more than once.
+.HP
+\fB\-f\fR
+.TP
+force training, ignoring the trained header.
+Use this if you
+.IP
+need to rebuild your database from scratch.
+.HP
+\fB\-q\fR
+.IP
+quiet mode; no output
+.TP
+\fB\-n\fR
+train mail residing in "new" directory, in addition to "cur"
+directory, which is always trained (Maildir only)
+.TP
+\fB\-r\fR
+remove mail which was trained on (Maildir only)
+.HP
+\fB\-o\fR section:option:value
+.IP
+set [section, option] in the options database to value
+.SH "SEE ALSO"
+The full documentation for
+.B option
+is maintained as a Texinfo manual.  If the
+.B info
+and
+.B option
+programs are properly installed at your site, the command
+.IP
+.B info option
+.PP
+should give you access to the complete manual.

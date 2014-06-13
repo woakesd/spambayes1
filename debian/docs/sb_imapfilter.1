@@ -1,0 +1,91 @@
+.TH SB_IMAPFILTER "1" "June 2014" "sb_imapfilter" "User Commands"
+.SH NAME
+sb_imapfilter - An IMAP filter 
+.SH DESCRIPTION
+An IMAP message box is scanned and all non\-scored
+messages are scored and (where necessary) filtered.
+.SS "Usage:"
+.IP
+sb_imapfilter [options]
+.IP
+note: option values with spaces in them must be enclosed
+.IP
+in double quotes
+.IP
+options:
+.TP
+\fB\-p\fR
+dbname  : pickled training database filename
+.TP
+\fB\-d\fR
+dbname  : dbm training database filename
+.TP
+\fB\-t\fR
+: train contents of spam folder and ham folder
+.TP
+\fB\-c\fR
+: classify inbox
+.TP
+\fB\-h\fR
+: display this message
+.TP
+\fB\-v\fR
+: verbose mode
+.TP
+\fB\-P\fR
+: security option to prompt for imap password,
+.IP
+rather than look in options["imap", "password"]
+.TP
+\fB\-e\fR y/n
+: expunge/purge messages on exit (y) or not (n)
+.IP
+\fB\-i\fR debuglvl : a somewhat mysterious imaplib debugging level
+.IP
+(4 is a good level, and suitable for bug reports)
+.TP
+\fB\-l\fR minutes
+: period of time between filtering operations
+.TP
+\fB\-b\fR
+: Launch a web browser showing the user interface.
+.IP
+\fB\-o\fR section:option:value :
+.IP
+set [section, option] in the options database
+to value
+.PP
+
+.IP
+Classify inbox, with dbm database
+.IP
+sb_imapfilter \fB\-c\fR \fB\-d\fR bayes.db
+.IP
+Train Spam and Ham, then classify inbox, with dbm database
+.IP
+sb_imapfilter \fB\-t\fR \fB\-c\fR \fB\-d\fR bayes.db
+.IP
+Train Spam and Ham only, with pickled database
+.IP
+sb_imapfilter \fB\-t\fR \fB\-p\fR bayes.db
+.SS "Warnings:"
+.IP
+o We never delete mail, unless you use the \fB\-e\fR/purge option, but we do
+.IP
+mark a lot as deleted, and your mail client might remove that for
+you.  We try to only mark as deleted once the moved/altered message
+is correctly saved, but things might go wrong.  We *strongly*
+recommend that you try this script out on mail that you can recover
+from somewhere else, at least at first.
+.SH "SEE ALSO"
+The full documentation for
+.B option
+is maintained as a Texinfo manual.  If the
+.B info
+and
+.B option
+programs are properly installed at your site, the command
+.IP
+.B info option
+.PP
+should give you access to the complete manual.

@@ -1,3 +1,33 @@
+spambayes (1.1b1-1) unstable; urgency=low
+
+  [ Jakub Wilk ]
+  * Use canonical URIs for Vcs-* fields.
+
+  [ Hugo Lefeuvre ]
+  * New upstream release.
+  * debian/copyright:
+    - Added a line to signal the adoption.
+  * debian/control:
+    - Deleted Alexandre from the Uploaders field at his request.
+    - Added myself in the Uploaders field.
+    - Use the last version of Debian Policy, 3.9.5 instead of 3.9.2.
+  * debian/spambayes.prerm and debian/spambayes.postinst:
+    - Fixed a lintian pedantic warning by deleting -e from shebang and
+      adding set -e.
+  * debian/spambayes.docs:
+    - Listed the CHANGELOG.txt file.
+  * debian/rules: 
+    - Added build-arch and build-indep directives.
+    - Added dh_installman -i directive.
+  * debian/patches/series and debian/patches/asyncore.patch
+    - Written and added asyncore.patch to fix the 'from spambayes import
+      asyncore' error.
+  * debian/docs/* and debian/manpages
+    - Written manpages for core_server (closes: #457197), and sb_*
+      (closes: #286550).
+
+ -- Hugo Lefeuvre <hugo6390@orange.fr>  Fri, 13 Jun 2014 11:07:33 +0200
+
 spambayes (1.1a6-1) unstable; urgency=low
 
   * new upstream release (closes: #586802)

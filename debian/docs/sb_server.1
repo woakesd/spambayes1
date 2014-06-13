@@ -1,0 +1,63 @@
+.TH SB_SERVER "1" "June 2014" "sb_server" "User Commands"
+.SH NAME
+sb_server - The primary server for SpamBayes.
+.SH DESCRIPTION
+.PP
+Currently serves the web interface, and any configured POP3 and SMTP
+proxies.
+.PP
+The POP3 proxy works with classifier.py, and adds a simple
+X\-Spambayes\-Classification header (ham/spam/unsure) to each incoming
+email.  You point the proxy at your POP3 server, and configure your
+email client to collect mail from the proxy then filter on the added
+header.  Usage:
+.IP
+sb_server.py [options] [<server> [<server port>]]
+.IP
+<server> is the name of your real POP3 server
+<port>   is the port number of your real POP3 server, which
+.IP
+defaults to 110.
+.IP
+options:
+.TP
+\fB\-h\fR
+: Displays this help message.
+.IP
+\fB\-d\fR FILE : use the named DBM database file
+\fB\-p\fR FILE : the the named Pickle database file
+\fB\-l\fR port : proxy listens on this port number (default 110)
+\fB\-u\fR port : User interface listens on this port number
+.IP
+(default 8880; Browse http://localhost:8880/)
+.TP
+\fB\-b\fR
+: Launch a web browser showing the user interface.
+.IP
+\fB\-o\fR section:option:value :
+.IP
+set [section, option] in the options database
+to value
+.IP
+All command line arguments and switches take their default
+values from the [pop3proxy] and [html_ui] sections of
+bayescustomize.ini.
+.PP
+For safety, and to help debugging, the whole POP3 conversation is
+written out to _pop3proxy.log for each run, if
+options["globals", "verbose"] is True.
+.PP
+To make rebuilding the database easier, uploaded messages are appended
+to _pop3proxyham.mbox and _pop3proxyspam.mbox.
+.SH "SEE ALSO"
+The full documentation for
+.B option
+is maintained as a Texinfo manual.  If the
+.B info
+and
+.B option
+programs are properly installed at your site, the command
+.IP
+.B info option
+.PP
+should give you access to the complete manual.
