@@ -6,7 +6,7 @@ set -e
 SCRIPTS="sb_xmlrpcserver sb_server sb_bnfilter sb_mailsort \
         sb_unheader sb_client sb_filter sb_mboxtrain sb_bnserver \
         sb_chkopts sb_upload sb_dbexpimp sb_imapfilter \
-        sb_notesfilter sb_evoscore"
+        sb_evoscore"
 
 
 if [ "$1" = configure ] ; then

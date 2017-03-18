@@ -1,3 +1,12 @@
+spambayes (1.1b1-1.1) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * debian/spambayes.postinst:
+      - Removed the sb_notesfilter to avoid create broken symlink.
+        (closes: #857531)
+
+ -- Marcio de Souza Oliveira <m.desouza20@gmail.com>  Sat, 18 Mar 2017 16:59:15 +0000
+
 spambayes (1.1b1-1) unstable; urgency=low
 
   [ Jakub Wilk ]
