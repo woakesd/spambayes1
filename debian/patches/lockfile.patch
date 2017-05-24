@@ -1,0 +1,26 @@
+Description: Compatibility with newer python-lockfile
+ Follow the gratuitous renaming of the main python-lockfile API.
+Author: <jepler@unpythonic.net>
+Bug-Debian: https://bugs.debian.org/789564
+Forwarded: no
+Last-Update: 2017-05-24
+--- a/spambayes/safepickle.py	2008-11-25 02:33:24.000000000 +0100
++++ b/spambayes/safepickle.py	2017-05-24 16:23:21.063862689 +0200
+@@ -10,7 +10,7 @@
+ 
+ def pickle_read(filename):
+     """Read pickle file contents with a lock."""
+-    lock = lockfile.FileLock(filename)
++    lock = lockfile.LockFile(filename)
+     lock.acquire(timeout=20)
+     try:
+         return pickle.load(open(filename, 'rb'))
+@@ -20,7 +20,7 @@
+ def pickle_write(filename, value, protocol=0):
+     '''Store value as a pickle without creating corruption'''
+ 
+-    lock = lockfile.FileLock(filename)
++    lock = lockfile.LockFile(filename)
+     lock.acquire(timeout=20)
+ 
+     try:

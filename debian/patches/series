@@ -1,3 +1,4 @@
+lockfile.patch
 gnus_fix.patch
 paths_fix.patch
 asyncore.patch

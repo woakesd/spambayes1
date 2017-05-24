@@ -1,3 +1,25 @@
+spambayes (1.1b1-2) experimental; urgency=low
+
+  * Acknowledge NMU (Closes: #857531). Thanks Marcio !
+  * debian/control:
+    - Update Hugo Lefeuvre's e-mail address.
+    - Depend on debhelper 10 instead of 5.
+    - Bump Standards-Version to 3.9.8. 
+    - Remove useless version indication in the python dependency.
+  * Bump debian/compat to 10.
+  * Port debian/rules to pybuild.
+  * debian/copyright:
+    - Make debian/copyright DEP5 compliant.
+    - Re-license debian/* to GPL-3+ (Approved by Alexandre Fayolle).
+    - Update Hugo Lefeuvre's e-mail address.
+  * Upstream changelog is automatically installed, stop mentionning
+    it in debian/spambayes.docs
+  * Remove debian/TODO, not up-to-date anymore.
+  * debian/patches/lockfile.patch:
+    - Compatibility with newer python-lockfile (>> 0.10) (Closes: #789564)
+
+ -- Hugo Lefeuvre <hle@debian.org>  Wed, 24 May 2017 15:09:12 +0200
+
 spambayes (1.1b1-1.1) unstable; urgency=medium
 
   * Non-maintainer upload.
