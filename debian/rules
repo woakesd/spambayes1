@@ -1,7 +1,13 @@
 #!/usr/bin/make -f
 
 export PYBUILD_NAME=spamassassin
+SB=debian/spambayes
 
 %:
 	dh $@ --with python2 --buildsystem=pybuild
 
+override_dh_auto_install:
+	dh_auto_install
+	rename "s/.py//" $(SB)/usr/bin/*.py
+	rm -f $(SB)/usr/bin/sb_pop3dnd 
+	rm -f $(SB)/usr/bin/sb_notesfilter

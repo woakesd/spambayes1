@@ -1,3 +1,16 @@
+spambayes (1.1b1-3) experimental; urgency=medium
+
+  * Fix things broken by the pybuild port:
+    - fix script names ending with .py again (Closes: #863677).
+    - stop installing broken sb_notesfilter
+  * Remove debian/NEWS.Debian, debian/spambayes.postinst and spambayes.prerm:
+    - Stop providing .py symlinks in /usr/bin (this was a transition measure
+      since 1.0.4-6).
+  * Add rename to the Build-Dependencies, stop using deprecated prename
+    program.
+
+ -- Hugo Lefeuvre <hle@debian.org>  Sat, 10 Jun 2017 12:02:12 +0200
+
 spambayes (1.1b1-2) experimental; urgency=low
 
   * Acknowledge NMU (Closes: #857531). Thanks Marcio !
