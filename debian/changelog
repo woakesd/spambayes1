@@ -1,3 +1,13 @@
+spambayes (1.1b1-4) unstable; urgency=medium
+
+  * Upload to unstable (Closes: #876622).
+  * Modify debian/patches/asyncore.patch:
+    Instead of importing incompatible asyncore and asynchat modules from
+    Python, remove affected functionalities (Closes: #785503).
+  * Bump Standards-Version to 4.1.1. 
+
+ -- Hugo Lefeuvre <hle@debian.org>  Sat, 07 Oct 2017 09:56:27 +0200
+
 spambayes (1.1b1-3) experimental; urgency=medium
 
   * Fix things broken by the pybuild port:
