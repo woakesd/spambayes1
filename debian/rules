@@ -9,5 +9,5 @@ SB=debian/spambayes
 override_dh_auto_install:
 	dh_auto_install
 	rename "s/.py//" $(SB)/usr/bin/*.py
-	rm -f $(SB)/usr/bin/sb_pop3dnd 
+	rm -f $(SB)/usr/bin/sb_pop3dnd
 	rm -f $(SB)/usr/bin/sb_notesfilter
