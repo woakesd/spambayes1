@@ -9,7 +9,8 @@ Build-Depends: debhelper (>= 11),
                python-lockfile (>= 1:0.10),
                dh-python,
                rename
-Standards-Version: 4.1.5
+Standards-Version: 4.3.0
+Testsuite: autopkgtest-pkg-python
 Homepage: https://github.com/smontanaro/spambayes
 Vcs-Git: https://salsa.debian.org/python-team/applications/spambayes.git
 Vcs-Browser: https://salsa.debian.org/python-team/applications/spambayes

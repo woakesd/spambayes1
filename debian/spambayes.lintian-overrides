@@ -1,0 +1,2 @@
+# this is no documentation
+spambayes: package-contains-documentation-outside-usr-share-doc usr/lib/python2.7/dist-packages/spambayes/core_resources/README_txt.py

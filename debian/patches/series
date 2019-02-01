@@ -1,4 +1,4 @@
-asyncore.patch
 lockfile.patch
 gnus_fix.patch
 paths_fix.patch
+fix-imports-from-sb_server.patch
